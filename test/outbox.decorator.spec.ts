@@ -41,6 +41,7 @@ describe('@OnOutboxEvent', () => {
 
   it('should throw if event class has no static eventType', () => {
     expect(() => {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       class TestHandler {
         @OnOutboxEvent(NoEventTypeEvent as any)
         handle() {}

@@ -171,11 +171,12 @@ For dynamic configuration (e.g. reading from `ConfigService`):
 
 ```typescript
 OutboxModule.forRootAsync({
-  useFactory: (config: ConfigService) => ({
-    prisma: PrismaService,
+  imports: [PrismaModule],
+  useFactory: (config: ConfigService, prisma: PrismaService) => ({
+    prisma,
     polling: { interval: config.get('OUTBOX_POLL_INTERVAL') },
   }),
-  inject: [ConfigService],
+  inject: [ConfigService, PrismaService],
 })
 ```
 
@@ -215,32 +216,27 @@ When the NestJS application receives a shutdown signal:
 
 This prevents an event from being left permanently in the `PROCESSING` status due to an abrupt shutdown. Events that do get stuck (e.g. a SIGKILL) are recovered automatically on the next startup via the `stuckThreshold` mechanism.
 
-## Custom Transport
+## Custom Transport (v0.2)
 
-`OutboxTransport` is the extension point for v0.2. Today the built-in transport dispatches events to in-process `@OnOutboxEvent()` listeners. In v0.2 you will be able to swap it for a message broker transport (Kafka, SQS, RabbitMQ, etc.) without changing any of your emitting or listening code.
+`OutboxTransport` is the extension point for future versions. Today the built-in `LocalTransport` dispatches events directly to in-process `@OnOutboxEvent()` listeners.
+
+In v0.2, you will be able to implement the `OutboxTransport` interface to deliver events to external brokers:
 
 ```typescript
-import { OutboxTransport, OutboxEventRecord } from '@nestarc/outbox';
+import { OutboxTransport, OutboxRecord, OutboxHandler } from '@nestarc/outbox';
 
 @Injectable()
-export class KafkaOutboxTransport implements OutboxTransport {
-  async send(event: OutboxEventRecord): Promise<void> {
+export class KafkaTransport implements OutboxTransport {
+  async dispatch(record: OutboxRecord, handlers: OutboxHandler[]): Promise<void> {
     await this.kafkaProducer.send({
-      topic: event.eventType,
-      messages: [{ value: JSON.stringify(event.payload) }],
+      topic: record.eventType,
+      messages: [{ value: JSON.stringify(record.payload) }],
     });
   }
 }
 ```
 
-Register the custom transport with the module options:
-
-```typescript
-OutboxModule.forRoot({
-  prisma: PrismaService,
-  transport: KafkaOutboxTransport, // v0.2
-})
-```
+> Custom transport registration via module options is not yet available in v0.1. The `OutboxTransport` interface is exported for early adopters who want to prepare their implementations.
 
 ## Ecosystem
 
@@ -249,7 +245,7 @@ OutboxModule.forRoot({
 | [`@nestarc/tenancy`](https://www.npmjs.com/package/@nestarc/tenancy) | Multi-tenancy for NestJS and Prisma — row-level isolation with zero boilerplate |
 | [`@nestarc/idempotency`](https://www.npmjs.com/package/@nestarc/idempotency) | Idempotent request handling for NestJS — deduplicate API calls at the decorator level |
 
-`@nestarc/outbox` integrates natively with `@nestarc/tenancy`: the `tenant_id` column on `outbox_events` is populated automatically when the tenancy context is active.
+The `outbox_events` table includes a `tenant_id` column for future `@nestarc/tenancy` integration. In v0.2, this will be populated automatically when the tenancy context is active. Currently, it defaults to `NULL`.
 
 ## License
 

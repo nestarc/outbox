@@ -47,7 +47,7 @@ describe('OutboxEmitter', () => {
       await emitter.emit(tx, event);
 
       expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
-      const [strings, ...values] = tx.$executeRaw.mock.calls[0];
+      const [, ...values] = tx.$executeRaw.mock.calls[0];
       expect(values[0]).toBe('order.created');
       expect(values[1]).toBe(JSON.stringify({ orderId: 'order-1', total: 99.99 }));
       expect(values[2]).toBe(5); // maxRetries

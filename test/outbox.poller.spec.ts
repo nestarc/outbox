@@ -73,9 +73,22 @@ function createPoller(overrides?: {
 }
 
 describe('OutboxPoller', () => {
+  // Clean up any intervals created by onModuleInit
+  let registeredIntervals: NodeJS.Timeout[] = [];
+
+  afterEach(() => {
+    for (const interval of registeredIntervals) {
+      clearInterval(interval);
+    }
+    registeredIntervals = [];
+  });
+
   describe('onModuleInit', () => {
     it('should register interval with SchedulerRegistry', () => {
       const schedulerRegistry = createMockSchedulerRegistry();
+      schedulerRegistry.addInterval.mockImplementation((_name, interval) => {
+        registeredIntervals.push(interval as NodeJS.Timeout);
+      });
       const poller = createPoller({ schedulerRegistry });
 
       poller.onModuleInit();
@@ -115,7 +128,7 @@ describe('OutboxPoller', () => {
       expect(prisma.$executeRaw).toHaveBeenCalled();
     });
 
-    it('should mark event as SENT when no handlers exist', async () => {
+    it('should mark event as FAILED when no handlers exist', async () => {
       const record = createRecord();
       const prisma = createMockPrisma([record]);
       const explorer = createMockExplorer({});
@@ -123,7 +136,11 @@ describe('OutboxPoller', () => {
       const poller = createPoller({ prisma, explorer });
       await poller.poll();
 
+      // Should call $executeRaw to mark as FAILED (not SENT)
       expect(prisma.$executeRaw).toHaveBeenCalled();
+      const call = prisma.$executeRaw.mock.calls[0];
+      const sqlStrings = call[0].join('');
+      expect(sqlStrings).toContain('FAILED');
     });
 
     it('should handle transport failure and increment retry count', async () => {
@@ -178,6 +195,50 @@ describe('OutboxPoller', () => {
       await poller.poll();
 
       expect(transport.dispatch).not.toHaveBeenCalled();
+    });
+
+    it('should recover stuck events on every 10th poll cycle', async () => {
+      const prisma = createMockPrisma([]);
+      const poller = createPoller({ prisma });
+
+      // Poll 9 times — no recovery
+      for (let i = 0; i < 9; i++) {
+        await poller.poll();
+      }
+      // $executeRaw should not have been called (no stuck recovery, no events)
+      expect(prisma.$executeRaw).not.toHaveBeenCalled();
+
+      // 10th poll — should trigger stuck recovery
+      await poller.poll();
+      expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+      const call = prisma.$executeRaw.mock.calls[0];
+      const sqlStrings = call[0].join('');
+      expect(sqlStrings).toContain('PROCESSING');
+      expect(sqlStrings).toContain('PENDING');
+    });
+
+    it('should use record.maxRetries for failure threshold', async () => {
+      // Record has maxRetries=2 but process config has maxRetries=3
+      const record = createRecord({ retryCount: 1, maxRetries: 2 });
+      const prisma = createMockPrisma([record]);
+      const transport = createMockTransport();
+      transport.dispatch.mockRejectedValue(new Error('fail'));
+      const handler = { instance: {}, methodName: 'handle', eventTypes: ['order.created'] };
+      const explorer = createMockExplorer({ 'order.created': [handler] });
+
+      const poller = createPoller({
+        prisma,
+        transport,
+        explorer,
+        options: { retry: { maxRetries: 10 } }, // process config says 10
+      });
+      await poller.poll();
+
+      // Should use record.maxRetries (2), not process config (10)
+      // retryCount=1, newRetryCount=2, record.maxRetries=2 → FAILED
+      const call = prisma.$executeRaw.mock.calls[0];
+      const sqlStrings = call[0].join('');
+      expect(sqlStrings).toContain('FAILED');
     });
   });
 

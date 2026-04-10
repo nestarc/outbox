@@ -1,8 +1,9 @@
+import { Injectable, Module } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { OutboxModule } from '../src/outbox.module';
 import { OutboxEmitter } from '../src/outbox.emitter';
 import { OUTBOX_OPTIONS, OUTBOX_TRANSPORT } from '../src/outbox.constants';
-import type { OutboxOptions } from '../src/interfaces/outbox-options.interface';
+import type { OutboxOptions, OutboxOptionsFactory } from '../src/interfaces/outbox-options.interface';
 import type { OutboxTransport } from '../src/interfaces/outbox-transport.interface';
 
 const mockPrisma = {
@@ -73,6 +74,62 @@ describe('OutboxModule', () => {
 
       const options = module.get<OutboxOptions>(OUTBOX_OPTIONS);
       expect(options.retry?.maxRetries).toBe(7);
+    });
+
+    it('should support useClass', async () => {
+      @Injectable()
+      class OutboxConfigService implements OutboxOptionsFactory {
+        createOutboxOptions(): OutboxOptions {
+          return {
+            prisma: mockPrisma,
+            polling: { enabled: false },
+            retry: { maxRetries: 12 },
+          };
+        }
+      }
+
+      const module = await Test.createTestingModule({
+        imports: [
+          OutboxModule.forRootAsync({
+            useClass: OutboxConfigService,
+          }),
+        ],
+      }).compile();
+
+      const options = module.get<OutboxOptions>(OUTBOX_OPTIONS);
+      expect(options.retry?.maxRetries).toBe(12);
+    });
+
+    it('should support useExisting', async () => {
+      @Injectable()
+      class ExistingConfigService implements OutboxOptionsFactory {
+        createOutboxOptions(): OutboxOptions {
+          return {
+            prisma: mockPrisma,
+            polling: { enabled: false },
+            retry: { maxRetries: 15 },
+          };
+        }
+      }
+
+      @Module({
+        providers: [ExistingConfigService],
+        exports: [ExistingConfigService],
+      })
+      class ConfigModule {}
+
+      const module = await Test.createTestingModule({
+        imports: [
+          ConfigModule,
+          OutboxModule.forRootAsync({
+            imports: [ConfigModule],
+            useExisting: ExistingConfigService,
+          }),
+        ],
+      }).compile();
+
+      const options = module.get<OutboxOptions>(OUTBOX_OPTIONS);
+      expect(options.retry?.maxRetries).toBe(15);
     });
 
     it('should throw if no provider method is given', () => {

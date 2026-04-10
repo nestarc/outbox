@@ -1,5 +1,4 @@
 import { OutboxExplorer } from '../src/outbox.explorer';
-import { OUTBOX_EVENT_METADATA } from '../src/outbox.constants';
 import type { DiscoveryService, MetadataScanner } from '@nestjs/core';
 import type { Reflector } from '@nestjs/core';
 

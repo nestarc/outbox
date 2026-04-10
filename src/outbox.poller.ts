@@ -10,7 +10,6 @@ import {
   DEFAULT_BACKOFF,
   DEFAULT_BATCH_SIZE,
   DEFAULT_INITIAL_DELAY,
-  DEFAULT_MAX_RETRIES,
   DEFAULT_POLLING_INTERVAL,
   DEFAULT_SHUTDOWN_TIMEOUT,
   DEFAULT_STUCK_THRESHOLD,
@@ -35,7 +34,6 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
   private readonly pollingEnabled: boolean;
   private readonly interval: number;
   private readonly batchSize: number;
-  private readonly maxRetries: number;
   private readonly backoff: 'fixed' | 'exponential';
   private readonly initialDelay: number;
   private readonly stuckThreshold: number;
@@ -49,7 +47,6 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
     this.pollingEnabled = options.polling?.enabled ?? true;
     this.interval = options.polling?.interval ?? DEFAULT_POLLING_INTERVAL;
     this.batchSize = options.polling?.batchSize ?? DEFAULT_BATCH_SIZE;
-    this.maxRetries = options.retry?.maxRetries ?? DEFAULT_MAX_RETRIES;
     this.backoff = options.retry?.backoff ?? DEFAULT_BACKOFF;
     this.initialDelay = options.retry?.initialDelay ?? DEFAULT_INITIAL_DELAY;
     this.stuckThreshold = options.stuckThreshold ?? DEFAULT_STUCK_THRESHOLD;
@@ -108,10 +105,13 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
         const handlers = this.explorer.getHandlers(record.eventType);
 
         if (handlers.length === 0) {
-          this.logger.warn(
-            `No handlers for event type "${record.eventType}", marking as SENT`,
+          this.logger.error(
+            `No handlers for event type "${record.eventType}", marking as FAILED`,
           );
-          await this.markSent(record.id);
+          await this.markFailed(
+            record.id,
+            `No registered handlers for event type "${record.eventType}"`,
+          );
           continue;
         }
 
@@ -177,6 +177,17 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
     `;
   }
 
+  private async markFailed(id: string, errorMessage: string): Promise<void> {
+    const prisma = this.options.prisma;
+    await prisma.$executeRaw`
+      UPDATE outbox_events
+      SET status = 'FAILED',
+          last_error = ${errorMessage},
+          updated_at = NOW()
+      WHERE id = ${id}::uuid
+    `;
+  }
+
   private async handleFailure(
     record: OutboxRecord,
     error: Error,
@@ -185,7 +196,7 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
     const prisma = this.options.prisma;
     const errorMessage = error.message;
 
-    if (newRetryCount >= this.maxRetries) {
+    if (newRetryCount >= record.maxRetries) {
       this.logger.error(
         `Event ${record.id} failed permanently after ${newRetryCount} retries: ${errorMessage}`,
       );
@@ -199,7 +210,7 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
       `;
     } else {
       this.logger.warn(
-        `Event ${record.id} failed (retry ${newRetryCount}/${this.maxRetries}): ${errorMessage}`,
+        `Event ${record.id} failed (retry ${newRetryCount}/${record.maxRetries}): ${errorMessage}`,
       );
       await prisma.$executeRaw`
         UPDATE outbox_events
