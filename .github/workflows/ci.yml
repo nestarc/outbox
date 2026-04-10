@@ -53,8 +53,8 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: Type check
-        run: npx tsc --noEmit -p tsconfig.json
+      - name: Type check (src)
+        run: npx tsc --noEmit -p tsconfig.build.json
 
   test:
     name: Test (Node ${{ matrix.node }} x NestJS ${{ matrix.nestjs }})
