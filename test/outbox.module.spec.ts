@@ -1,4 +1,4 @@
-import { Injectable, Module } from '@nestjs/common';
+import { Global, Injectable, Module } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { OutboxModule } from '../src/outbox.module';
 import { OutboxEmitter } from '../src/outbox.emitter';
@@ -11,8 +11,37 @@ const mockPrisma = {
   $executeRaw: jest.fn(),
 };
 
+@Injectable()
+class MockPrismaService {
+  $queryRaw = jest.fn();
+  $executeRaw = jest.fn();
+}
+
 describe('OutboxModule', () => {
   describe('forRoot', () => {
+    it('should resolve prisma class reference via DI', async () => {
+      @Global()
+      @Module({
+        providers: [MockPrismaService],
+        exports: [MockPrismaService],
+      })
+      class PrismaModule {}
+
+      const module = await Test.createTestingModule({
+        imports: [
+          PrismaModule,
+          OutboxModule.forRoot({
+            prisma: MockPrismaService,
+            polling: { enabled: false },
+          }),
+        ],
+      }).compile();
+
+      const options = module.get<OutboxOptions>(OUTBOX_OPTIONS);
+      // prisma should be the resolved instance, not the class
+      expect(options.prisma).toBeInstanceOf(MockPrismaService);
+    });
+
     it('should provide OutboxEmitter', async () => {
       const module = await Test.createTestingModule({
         imports: [

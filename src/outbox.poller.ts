@@ -29,6 +29,7 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
   private readonly logger = new Logger(OutboxPoller.name);
   private isShuttingDown = false;
   private activeCount = 0;
+  private pollInFlight = 0;
   private pollCount = 0;
 
   private readonly pollingEnabled: boolean;
@@ -73,15 +74,15 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
 
     const start = Date.now();
     while (
-      this.activeCount > 0 &&
+      (this.pollInFlight > 0 || this.activeCount > 0) &&
       Date.now() - start < DEFAULT_SHUTDOWN_TIMEOUT
     ) {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
 
-    if (this.activeCount > 0) {
+    if (this.pollInFlight > 0 || this.activeCount > 0) {
       this.logger.warn(
-        `Shutdown timeout: ${this.activeCount} events still processing`,
+        `Shutdown timeout: ${this.pollInFlight} polls, ${this.activeCount} events still in flight`,
       );
     }
   }
@@ -89,41 +90,46 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
   async poll(): Promise<void> {
     if (this.isShuttingDown) return;
 
-    this.pollCount++;
+    this.pollInFlight++;
+    try {
+      this.pollCount++;
 
-    if (this.pollCount % STUCK_RECOVERY_INTERVAL === 0) {
-      await this.recoverStuckEvents();
-    }
-
-    const records = await this.fetchAndLock();
-
-    for (const record of records) {
-      if (this.isShuttingDown) break;
-
-      this.activeCount++;
-      try {
-        const handlers = this.explorer.getHandlers(record.eventType);
-
-        if (handlers.length === 0) {
-          this.logger.error(
-            `No handlers for event type "${record.eventType}", marking as FAILED`,
-          );
-          await this.markFailed(
-            record.id,
-            `No registered handlers for event type "${record.eventType}"`,
-          );
-          continue;
-        }
-
-        await this.transport.dispatch(record, handlers);
-        await this.markSent(record.id);
-      } catch (error) {
-        const err =
-          error instanceof Error ? error : new Error(String(error));
-        await this.handleFailure(record, err);
-      } finally {
-        this.activeCount--;
+      if (this.pollCount % STUCK_RECOVERY_INTERVAL === 0) {
+        await this.recoverStuckEvents();
       }
+
+      const records = await this.fetchAndLock();
+
+      for (const record of records) {
+        if (this.isShuttingDown) break;
+
+        this.activeCount++;
+        try {
+          const handlers = this.explorer.getHandlers(record.eventType);
+
+          if (handlers.length === 0) {
+            this.logger.error(
+              `No handlers for event type "${record.eventType}", marking as FAILED`,
+            );
+            await this.markFailed(
+              record.id,
+              `No registered handlers for event type "${record.eventType}"`,
+            );
+            continue;
+          }
+
+          await this.transport.dispatch(record, handlers);
+          await this.markSent(record.id);
+        } catch (error) {
+          const err =
+            error instanceof Error ? error : new Error(String(error));
+          await this.handleFailure(record, err);
+        } finally {
+          this.activeCount--;
+        }
+      }
+    } finally {
+      this.pollInFlight--;
     }
   }
 

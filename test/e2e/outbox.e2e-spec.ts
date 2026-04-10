@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import { Test } from '@nestjs/testing';
 import { Injectable, type INestApplication } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
@@ -58,22 +60,16 @@ class FailingListener {
   }
 }
 
-const MIGRATION_SQL = `
-  CREATE TABLE IF NOT EXISTS outbox_events (
-    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    event_type    VARCHAR(255) NOT NULL,
-    payload       JSONB NOT NULL,
-    status        VARCHAR(20) NOT NULL DEFAULT 'PENDING',
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    processed_at  TIMESTAMPTZ,
-    retry_count   INT NOT NULL DEFAULT 0,
-    max_retries   INT NOT NULL DEFAULT 5,
-    last_error    TEXT,
-    tenant_id     VARCHAR(255),
-    CONSTRAINT chk_status CHECK (status IN ('PENDING', 'PROCESSING', 'SENT', 'FAILED'))
-  );
-`;
+const MIGRATION_SQL_FILE = fs.readFileSync(
+  path.join(__dirname, '../../src/sql/create-outbox-table.sql'),
+  'utf-8',
+);
+
+// Split multi-statement SQL for Prisma's $executeRawUnsafe (single statement only)
+const MIGRATION_STATEMENTS = MIGRATION_SQL_FILE
+  .split(';')
+  .map((s) => s.trim())
+  .filter((s) => s.length > 0 && !s.startsWith('--'));
 
 async function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -85,7 +81,9 @@ describe('Outbox E2E', () => {
   beforeAll(async () => {
     prisma = new PrismaService();
     await prisma.$connect();
-    await prisma.$executeRawUnsafe(MIGRATION_SQL);
+    for (const stmt of MIGRATION_STATEMENTS) {
+      await prisma.$executeRawUnsafe(stmt);
+    }
   });
 
   afterAll(async () => {

@@ -143,8 +143,8 @@ describe('OutboxPoller', () => {
       expect(sqlStrings).toContain('FAILED');
     });
 
-    it('should handle transport failure and increment retry count', async () => {
-      const record = createRecord({ retryCount: 0 });
+    it('should revert to PENDING with incremented retry_count and last_error on failure', async () => {
+      const record = createRecord({ retryCount: 1, maxRetries: 5 });
       const prisma = createMockPrisma([record]);
       const transport = createMockTransport();
       transport.dispatch.mockRejectedValue(new Error('handler failed'));
@@ -154,10 +154,19 @@ describe('OutboxPoller', () => {
       const poller = createPoller({ prisma, transport, explorer });
       await poller.poll();
 
-      expect(prisma.$executeRaw).toHaveBeenCalled();
+      expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+      const [strings, ...values] = prisma.$executeRaw.mock.calls[0];
+      const sql = strings.join('');
+      // Should set status to PENDING (retry, not final failure)
+      expect(sql).toContain('PENDING');
+      expect(sql).not.toContain('FAILED');
+      // Should pass incremented retry_count (1 → 2)
+      expect(values).toContain(2);
+      // Should pass error message
+      expect(values).toContain('handler failed');
     });
 
-    it('should mark as FAILED when max retries exceeded', async () => {
+    it('should mark as FAILED with last_error when record.maxRetries exceeded', async () => {
       const record = createRecord({ retryCount: 2, maxRetries: 3 });
       const prisma = createMockPrisma([record]);
       const transport = createMockTransport();
@@ -165,16 +174,18 @@ describe('OutboxPoller', () => {
       const handler = { instance: {}, methodName: 'handle', eventTypes: ['order.created'] };
       const explorer = createMockExplorer({ 'order.created': [handler] });
 
-      const poller = createPoller({
-        prisma,
-        transport,
-        explorer,
-        options: { retry: { maxRetries: 3 } },
-      });
+      const poller = createPoller({ prisma, transport, explorer });
       await poller.poll();
 
-      const executeRawCalls = prisma.$executeRaw.mock.calls;
-      expect(executeRawCalls.length).toBeGreaterThan(0);
+      expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+      const [strings, ...values] = prisma.$executeRaw.mock.calls[0];
+      const sql = strings.join('');
+      // Should set status to FAILED (max retries reached)
+      expect(sql).toContain('FAILED');
+      // Should pass incremented retry_count (2 → 3)
+      expect(values).toContain(3);
+      // Should pass error message
+      expect(values).toContain('still failing');
     });
 
     it('should not poll when shutting down', async () => {
@@ -260,6 +271,41 @@ describe('OutboxPoller', () => {
 
       const poller = createPoller({ schedulerRegistry });
       await expect(poller.onApplicationShutdown()).resolves.toBeUndefined();
+    });
+
+    it('should wait for in-flight poll to complete before exiting', async () => {
+      let resolveFetchAndLock: () => void;
+      const fetchAndLockPromise = new Promise<void>((resolve) => {
+        resolveFetchAndLock = resolve;
+      });
+
+      const prisma = {
+        $queryRaw: jest.fn().mockImplementation(() => {
+          // Simulate a slow fetchAndLock
+          return fetchAndLockPromise.then(() => []);
+        }),
+        $executeRaw: jest.fn().mockResolvedValue(1),
+      };
+
+      const poller = createPoller({ prisma });
+
+      // Start poll (it will block on fetchAndLock)
+      const pollPromise = poller.poll();
+
+      // Start shutdown while poll is in-flight
+      const shutdownPromise = poller.onApplicationShutdown();
+
+      // Shutdown should NOT have resolved yet (poll is still running)
+      let shutdownDone = false;
+      shutdownPromise.then(() => { shutdownDone = true; });
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(shutdownDone).toBe(false);
+
+      // Now let fetchAndLock complete
+      resolveFetchAndLock!();
+      await pollPromise;
+      await shutdownPromise;
+      expect(shutdownDone).toBe(true);
     });
   });
 });
