@@ -39,7 +39,7 @@ export class OutboxModule {
 
     const transportProvider: Provider = {
       provide: OUTBOX_TRANSPORT,
-      useClass: LocalTransport,
+      useClass: options.transport ?? LocalTransport,
     };
 
     return {
@@ -62,7 +62,7 @@ export class OutboxModule {
 
     const transportProvider: Provider = {
       provide: OUTBOX_TRANSPORT,
-      useClass: LocalTransport,
+      useClass: options.transport ?? LocalTransport,
     };
 
     return {

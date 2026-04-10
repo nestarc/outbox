@@ -27,4 +27,7 @@ export type {
 export type { OutboxRecord } from './interfaces/outbox-record.interface';
 export type { OutboxTransport } from './interfaces/outbox-transport.interface';
 export type { OutboxHandler } from './interfaces/outbox-handler.interface';
-export type { PrismaTransactionClient } from './interfaces/prisma-transaction-client.interface';
+export type {
+  PrismaTransactionClient,
+  PrismaLike,
+} from './interfaces/prisma-transaction-client.interface';

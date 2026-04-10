@@ -85,6 +85,26 @@ describe('OutboxModule', () => {
       expect(transport).toBeDefined();
       expect(typeof transport.dispatch).toBe('function');
     });
+
+    it('should use custom transport when provided', async () => {
+      @Injectable()
+      class CustomTransport implements OutboxTransport {
+        async dispatch(): Promise<void> {}
+      }
+
+      const module = await Test.createTestingModule({
+        imports: [
+          OutboxModule.forRoot({
+            prisma: mockPrisma,
+            polling: { enabled: false },
+            transport: CustomTransport,
+          }),
+        ],
+      }).compile();
+
+      const transport = module.get<OutboxTransport>(OUTBOX_TRANSPORT);
+      expect(transport).toBeInstanceOf(CustomTransport);
+    });
   });
 
   describe('forRootAsync', () => {
