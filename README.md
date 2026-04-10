@@ -40,6 +40,8 @@ import { OutboxModule } from '@nestarc/outbox';
 export class AppModule {}
 ```
 
+> When passing a class reference to `prisma` in `forRoot()`, the class must be provided by a `@Global()` module (e.g. `PrismaModule`) so NestJS can resolve it across module boundaries.
+
 ### 2. Define an event class
 
 ```typescript
@@ -94,6 +96,8 @@ export class OrderNotificationListener {
   }
 }
 ```
+
+> If an event type has no registered handlers, the event is marked `FAILED` with an explanatory `last_error` to prevent silent data loss. Check your handler registrations if you see unexpected `FAILED` events.
 
 ## SQL Migration
 
@@ -155,13 +159,14 @@ All options passed to `OutboxModule.forRoot()` or the factory returned by `Outbo
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `prisma` | `Type<any>` / instance | **required** | `PrismaService` class reference (`forRoot`) or instance (`forRootAsync`) |
+| `prisma` | class ref / instance | **required** | `PrismaService` class reference (`forRoot`, must be `@Global`) or instance (`forRootAsync`). See `PrismaLike` type for minimum interface. |
 | `polling.enabled` | `boolean` | `true` | Enable or disable the polling scheduler |
 | `polling.interval` | `number` | `5000` | Milliseconds between polling cycles |
 | `polling.batchSize` | `number` | `100` | Maximum events processed per polling cycle |
 | `retry.maxRetries` | `number` | `5` | Maximum delivery attempts before marking an event `FAILED` |
 | `retry.backoff` | `'fixed' \| 'exponential'` | `'exponential'` | Backoff strategy between retries |
 | `retry.initialDelay` | `number` | `1000` | Initial delay in ms (base for exponential, constant for fixed) |
+| `transport` | `Type` | `LocalTransport` | Custom transport class implementing `OutboxTransport`. |
 | `isGlobal` | `boolean` | `true` | Register the module globally so `OutboxEmitter` is available everywhere |
 | `stuckThreshold` | `number` | `300000` | Events stuck in `PROCESSING` longer than this (ms) are reset to `PENDING` |
 
@@ -182,14 +187,14 @@ OutboxModule.forRootAsync({
 
 ## Retry and Backoff
 
-When a listener throws, the event `retry_count` is incremented and the event is rescheduled. Processing stops once `retry_count` reaches `max_retries`, at which point the status is set to `FAILED`.
+When a listener throws, the event `retry_count` is incremented and the event is rescheduled as `PENDING`. The failure threshold uses the per-record `max_retries` value stored in the database at emit time, so configuration changes during rolling deployments do not affect in-flight events.
 
 **Fixed backoff** — the delay between attempts is always `initialDelay` ms.
 
 **Exponential backoff** — the delay doubles on every attempt:
 
 ```
-delay = initialDelay * 2^(retry_count)
+delay = initialDelay * 2^(retry_count - 1)
 ```
 
 With the defaults (`initialDelay: 1000`, `maxRetries: 5`) the schedule is:
@@ -199,7 +204,7 @@ With the defaults (`initialDelay: 1000`, `maxRetries: 5`) the schedule is:
 
 ## Multi-Instance Safety
 
-When multiple application instances run against the same database (horizontal scaling, rolling deployments), each polling cycle uses `SELECT … FOR UPDATE SKIP LOCKED` inside a transaction.
+When multiple application instances run against the same database (horizontal scaling, rolling deployments), each polling cycle uses `SELECT ... FOR UPDATE SKIP LOCKED` inside a transaction.
 
 - The first instance to acquire a row locks it and processes it.
 - Other instances skip locked rows and move on.
@@ -211,24 +216,24 @@ When multiple application instances run against the same database (horizontal sc
 When the NestJS application receives a shutdown signal:
 
 1. The polling scheduler stops accepting new cycles.
-2. Any cycle currently in flight is allowed to complete.
+2. Any in-flight poll (including active DB queries) is allowed to complete.
 3. Only then does the process exit.
 
 This prevents an event from being left permanently in the `PROCESSING` status due to an abrupt shutdown. Events that do get stuck (e.g. a SIGKILL) are recovered automatically on the next startup via the `stuckThreshold` mechanism.
 
-## Custom Transport (v0.2)
+## Custom Transport
 
-`OutboxTransport` is the extension point for future versions. Today the built-in `LocalTransport` dispatches events directly to in-process `@OnOutboxEvent()` listeners.
-
-In v0.2, you will be able to implement the `OutboxTransport` interface to deliver events to external brokers:
+The `transport` option lets you replace the built-in `LocalTransport` with your own implementation of the `OutboxTransport` interface:
 
 ```typescript
 import { OutboxTransport, OutboxRecord, OutboxHandler } from '@nestarc/outbox';
 
 @Injectable()
 export class KafkaTransport implements OutboxTransport {
+  constructor(private readonly kafka: KafkaProducer) {}
+
   async dispatch(record: OutboxRecord, handlers: OutboxHandler[]): Promise<void> {
-    await this.kafkaProducer.send({
+    await this.kafka.send({
       topic: record.eventType,
       messages: [{ value: JSON.stringify(record.payload) }],
     });
@@ -236,7 +241,14 @@ export class KafkaTransport implements OutboxTransport {
 }
 ```
 
-> Custom transport registration via module options is not yet available in v0.1. The `OutboxTransport` interface is exported for early adopters who want to prepare their implementations.
+Register it via module options:
+
+```typescript
+OutboxModule.forRoot({
+  prisma: PrismaService,
+  transport: KafkaTransport,
+})
+```
 
 ## Ecosystem
 
