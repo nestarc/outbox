@@ -1,0 +1,81 @@
+# Dependabot configuration for @nestarc/outbox.
+#
+# Two ecosystems are watched:
+#   1. npm           — devDependencies and peer-ranged packages. Grouped
+#                      by domain so a single PR updates all NestJS/@types
+#                      packages together instead of opening 10+ PRs.
+#   2. github-actions— action versions in .github/workflows/*. These
+#                      rarely change but a stale @v3 action can silently
+#                      break a deprecation deadline.
+#
+# Schedule is weekly (Monday morning Seoul time) so PRs don't overwhelm
+# the author. Minor/patch updates are grouped; major bumps open their
+# own PRs so breaking changes surface individually.
+
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: '/'
+    schedule:
+      interval: weekly
+      day: monday
+      time: '09:00'
+      timezone: Asia/Seoul
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - npm
+    commit-message:
+      prefix: chore(deps)
+      include: scope
+    groups:
+      nestjs:
+        patterns:
+          - '@nestjs/*'
+      types:
+        patterns:
+          - '@types/*'
+      eslint-and-prettier:
+        patterns:
+          - 'eslint*'
+          - '@typescript-eslint/*'
+          - 'prettier*'
+      jest:
+        patterns:
+          - 'jest'
+          - 'ts-jest'
+          - '@types/jest'
+      prisma:
+        patterns:
+          - 'prisma'
+          - '@prisma/*'
+    ignore:
+      # Never bump these automatically — they are peer-declared and the
+      # supported ranges are intentional.
+      - dependency-name: '@nestjs/common'
+        update-types: ['version-update:semver-major']
+      - dependency-name: '@nestjs/core'
+        update-types: ['version-update:semver-major']
+      - dependency-name: '@nestjs/schedule'
+        update-types: ['version-update:semver-major']
+      - dependency-name: '@prisma/client'
+        update-types: ['version-update:semver-major']
+      - dependency-name: 'rxjs'
+        update-types: ['version-update:semver-major']
+      - dependency-name: 'reflect-metadata'
+        update-types: ['version-update:semver-major']
+
+  - package-ecosystem: github-actions
+    directory: '/'
+    schedule:
+      interval: weekly
+      day: monday
+      time: '09:00'
+      timezone: Asia/Seoul
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - github-actions
+    commit-message:
+      prefix: chore(ci)
+      include: scope

@@ -1,0 +1,165 @@
+name: CI
+
+# Runs on every push to main and every pull request targeting main.
+#
+# Three stages:
+#   1. lint  — fast static checks (eslint + type-check). Fails early before
+#              burning matrix CI minutes.
+#   2. test  — matrix (Node x NestJS) unit + e2e + coverage. Gated behind
+#              lint so invalid code never reaches the matrix.
+#              PostgreSQL service container provides a real database for E2E.
+#   3. pack  — clean build + `npm pack --dry-run` to prove the tarball is
+#              publish-ready. Single job because the output is identical
+#              across the matrix.
+#
+# Security notes:
+#   - No `${{ github.event.* }}` values are interpolated into `run:` shells.
+#     The only templated expressions are `${{ matrix.* }}` (trusted, defined
+#     in this file) and `${{ github.ref }}` (trusted, from the GitHub runner
+#     environment). This avoids the workflow-injection class of bugs.
+#   - Default permissions are reduced to `contents: read`.
+#   - `concurrency` cancels superseded commits on the same ref.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint & type-check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type check
+        run: npx tsc --noEmit -p tsconfig.json
+
+  test:
+    name: Test (Node ${{ matrix.node }} x NestJS ${{ matrix.nestjs }})
+    needs: lint
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: outbox_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20', '22']
+        nestjs: ['10', '11']
+
+    env:
+      DATABASE_URL: postgresql://test:test@localhost:5433/outbox_test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # For the v10 matrix cell, swap the dev-installed NestJS packages to
+      # the v10 major so the unit + e2e suites actually exercise the older
+      # runtime.
+      - name: Install NestJS v10 (matrix override)
+        if: matrix.nestjs == '10'
+        run: |
+          npm install --no-save \
+            @nestjs/common@^10 \
+            @nestjs/core@^10 \
+            @nestjs/platform-express@^10 \
+            @nestjs/testing@^10 \
+            @nestjs/schedule@^4
+
+      - name: Generate Prisma client
+        run: npm run prisma:generate
+
+      - name: Unit tests
+        run: npm test
+
+      - name: E2E tests
+        run: npm run test:e2e
+
+      - name: Coverage (primary cell only)
+        if: matrix.node == '20' && matrix.nestjs == '11'
+        run: npm run test:cov
+
+      - name: Upload coverage artifact
+        if: matrix.node == '20' && matrix.nestjs == '11'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          if-no-files-found: error
+          retention-days: 14
+
+  pack:
+    name: Pack (publish dry-run)
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Pack (dry run)
+        run: npm pack --dry-run
+
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
