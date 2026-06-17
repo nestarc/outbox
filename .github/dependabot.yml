@@ -9,8 +9,8 @@
 #                      break a deprecation deadline.
 #
 # Schedule is weekly (Monday morning Seoul time) so PRs don't overwhelm
-# the author. Minor/patch updates are grouped; major bumps open their
-# own PRs so breaking changes surface individually.
+# the author. Minor/patch updates are grouped; major bumps are ignored
+# by Dependabot and should be handled as explicit compatibility work.
 
 version: 2
 updates:
@@ -21,7 +21,7 @@ updates:
       day: monday
       time: '09:00'
       timezone: Asia/Seoul
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 3
     labels:
       - dependencies
       - npm
@@ -32,37 +32,41 @@ updates:
       nestjs:
         patterns:
           - '@nestjs/*'
+        update-types:
+          - minor
+          - patch
       types:
         patterns:
           - '@types/*'
+        update-types:
+          - minor
+          - patch
       eslint-and-prettier:
         patterns:
           - 'eslint*'
           - '@typescript-eslint/*'
           - 'prettier*'
+        update-types:
+          - minor
+          - patch
       jest:
         patterns:
           - 'jest'
           - 'ts-jest'
           - '@types/jest'
+        update-types:
+          - minor
+          - patch
       prisma:
         patterns:
           - 'prisma'
           - '@prisma/*'
+        update-types:
+          - minor
+          - patch
     ignore:
-      # Never bump these automatically — they are peer-declared and the
-      # supported ranges are intentional.
-      - dependency-name: '@nestjs/common'
-        update-types: ['version-update:semver-major']
-      - dependency-name: '@nestjs/core'
-        update-types: ['version-update:semver-major']
-      - dependency-name: '@nestjs/schedule'
-        update-types: ['version-update:semver-major']
-      - dependency-name: '@prisma/client'
-        update-types: ['version-update:semver-major']
-      - dependency-name: 'rxjs'
-        update-types: ['version-update:semver-major']
-      - dependency-name: 'reflect-metadata'
+      # Major bumps are compatibility work for a library with peer ranges.
+      - dependency-name: '*'
         update-types: ['version-update:semver-major']
 
   - package-ecosystem: github-actions
@@ -79,3 +83,13 @@ updates:
     commit-message:
       prefix: chore(ci)
       include: scope
+    groups:
+      github-actions:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
+    ignore:
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']
