@@ -1,6 +1,8 @@
 import { LocalTransport } from '../src/transports/local.transport';
 import type { OutboxRecord } from '../src/interfaces/outbox-record.interface';
 import type { OutboxHandler } from '../src/interfaces/outbox-handler.interface';
+import type { OutboxHandlerContext } from '../src/interfaces/outbox-handler-context.interface';
+import type { OutboxTenantProvider } from '../src/interfaces/outbox-tenancy.interface';
 
 function createRecord(overrides?: Partial<OutboxRecord>): OutboxRecord {
   return {
@@ -15,6 +17,14 @@ function createRecord(overrides?: Partial<OutboxRecord>): OutboxRecord {
     maxRetries: 5,
     lastError: null,
     tenantId: null,
+    aggregateType: null,
+    aggregateId: null,
+    partitionKey: null,
+    idempotencyKey: null,
+    correlationId: null,
+    causationId: null,
+    headers: {},
+    occurredAt: new Date(),
     ...overrides,
   };
 }
@@ -50,9 +60,72 @@ describe('LocalTransport', () => {
     const record = createRecord();
     await transport.dispatch(record, [handler1, handler2]);
 
-    expect(handler1.instance.handle1).toHaveBeenCalledWith(record.payload);
-    expect(handler2.instance.handle2).toHaveBeenCalledWith(record.payload);
+    expect(handler1.instance.handle1).toHaveBeenCalledWith(
+      record.payload,
+      expect.objectContaining({ eventId: record.id }),
+    );
+    expect(handler2.instance.handle2).toHaveBeenCalledWith(
+      record.payload,
+      expect.objectContaining({ eventId: record.id }),
+    );
     expect(callOrder).toEqual(['handler1', 'handler2']);
+  });
+
+  it('should pass metadata context as the second handler argument', async () => {
+    const handler: OutboxHandler = {
+      instance: {
+        handle: jest.fn(),
+      },
+      methodName: 'handle',
+      eventTypes: ['order.created'],
+    };
+    const record = createRecord({
+      tenantId: 'tenant-1',
+      retryCount: 2,
+      headers: { correlation: 'corr-1' },
+      correlationId: 'corr-1',
+    });
+
+    await transport.dispatch(record, [handler]);
+
+    expect(handler.instance.handle).toHaveBeenCalledWith(
+      record.payload,
+      expect.objectContaining<Partial<OutboxHandlerContext>>({
+        record,
+        eventId: record.id,
+        eventType: 'order.created',
+        tenantId: 'tenant-1',
+        retryCount: 2,
+        headers: { correlation: 'corr-1' },
+      }),
+    );
+  });
+
+  it('should restore tenant context when a tenant provider supports runWithTenant', async () => {
+    const runWithTenant = jest.fn();
+    const tenantProvider: OutboxTenantProvider = {
+      runWithTenant: async <T>(tenantId: string, fn: () => Promise<T>) => {
+        runWithTenant(tenantId, fn);
+        return fn();
+      },
+    };
+    transport = new LocalTransport(tenantProvider);
+    const handler: OutboxHandler = {
+      instance: {
+        handle: jest.fn(),
+      },
+      methodName: 'handle',
+      eventTypes: ['order.created'],
+    };
+    const record = createRecord({ tenantId: 'tenant-1' });
+
+    await transport.dispatch(record, [handler]);
+
+    expect(runWithTenant).toHaveBeenCalledWith(
+      'tenant-1',
+      expect.any(Function),
+    );
+    expect(handler.instance.handle).toHaveBeenCalled();
   });
 
   it('should abort on first failure (all-or-nothing)', async () => {

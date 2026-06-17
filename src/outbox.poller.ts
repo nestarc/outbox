@@ -17,12 +17,35 @@ import {
   OUTBOX_TRANSPORT,
   STUCK_RECOVERY_INTERVAL,
 } from './outbox.constants';
+import type { OutboxHandlerContext } from './interfaces/outbox-handler-context.interface';
+import type {
+  OutboxDispatchContext,
+  OutboxHooks,
+  OutboxRetryContext,
+} from './interfaces/outbox-hooks.interface';
 import type { OutboxOptions } from './interfaces/outbox-options.interface';
 import type { OutboxRecord } from './interfaces/outbox-record.interface';
+import type { OutboxPublisher } from './interfaces/outbox-publisher.interface';
 import type { OutboxTransport } from './interfaces/outbox-transport.interface';
 import { OutboxExplorer } from './outbox.explorer';
 
 const POLL_INTERVAL_NAME = 'outbox-poll';
+
+function hasPublish(transport: unknown): transport is OutboxPublisher {
+  return (
+    typeof transport === 'object' &&
+    transport !== null &&
+    typeof (transport as { publish?: unknown }).publish === 'function'
+  );
+}
+
+function hasDispatch(transport: unknown): transport is OutboxTransport {
+  return (
+    typeof transport === 'object' &&
+    transport !== null &&
+    typeof (transport as { dispatch?: unknown }).dispatch === 'function'
+  );
+}
 
 @Injectable()
 export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
@@ -38,10 +61,12 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
   private readonly backoff: 'fixed' | 'exponential';
   private readonly initialDelay: number;
   private readonly stuckThreshold: number;
+  private readonly deliveryMode: 'local' | 'publisher';
 
   constructor(
     @Inject(OUTBOX_OPTIONS) private readonly options: OutboxOptions,
-    @Inject(OUTBOX_TRANSPORT) private readonly transport: OutboxTransport,
+    @Inject(OUTBOX_TRANSPORT)
+    private readonly transport: OutboxTransport | OutboxPublisher,
     private readonly explorer: OutboxExplorer,
     private readonly schedulerRegistry: SchedulerRegistry,
   ) {
@@ -51,6 +76,7 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
     this.backoff = options.retry?.backoff ?? DEFAULT_BACKOFF;
     this.initialDelay = options.retry?.initialDelay ?? DEFAULT_INITIAL_DELAY;
     this.stuckThreshold = options.stuckThreshold ?? DEFAULT_STUCK_THRESHOLD;
+    this.deliveryMode = options.delivery?.mode ?? 'local';
   }
 
   onModuleInit(): void {
@@ -98,31 +124,37 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
         await this.recoverStuckEvents();
       }
 
+      await this.runHook('onPollStart', {
+        batchSize: this.batchSize,
+        deliveryMode: this.deliveryMode,
+      });
+
       const records = await this.fetchAndLock();
 
       for (const record of records) {
         if (this.isShuttingDown) break;
 
         this.activeCount++;
+        const dispatchContext = this.createDispatchContext(record);
+        const startedAt = Date.now();
         try {
-          const handlers = this.explorer.getHandlers(record.eventType);
-
-          if (handlers.length === 0) {
-            this.logger.error(
-              `No handlers for event type "${record.eventType}", marking as FAILED`,
-            );
-            await this.markFailed(
-              record.id,
-              `No registered handlers for event type "${record.eventType}"`,
-            );
-            continue;
+          await this.runHook('onDispatchStart', dispatchContext);
+          const dispatched = await this.dispatchRecord(record);
+          if (dispatched) {
+            await this.markSent(record.id);
+            await this.runHook('onDispatchSuccess', {
+              ...dispatchContext,
+              durationMs: Date.now() - startedAt,
+            });
           }
-
-          await this.transport.dispatch(record, handlers);
-          await this.markSent(record.id);
         } catch (error) {
           const err =
             error instanceof Error ? error : new Error(String(error));
+          await this.runHook('onDispatchFailure', {
+            ...dispatchContext,
+            error: err,
+            durationMs: Date.now() - startedAt,
+          });
           await this.handleFailure(record, err);
         } finally {
           this.activeCount--;
@@ -131,6 +163,50 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
     } finally {
       this.pollInFlight--;
     }
+  }
+
+  private async dispatchRecord(record: OutboxRecord): Promise<boolean> {
+    if (this.deliveryMode === 'publisher') {
+      if (hasPublish(this.transport)) {
+        await this.transport.publish(record);
+        return true;
+      }
+
+      if (hasDispatch(this.transport)) {
+        await this.transport.dispatch(record, []);
+        return true;
+      }
+
+      throw new Error(
+        'Outbox publisher mode requires a transport with publish(record) or dispatch(record, handlers)',
+      );
+    }
+
+    const handlers = this.explorer.getHandlers(record.eventType);
+
+    if (handlers.length === 0) {
+      this.logger.error(
+        `No handlers for event type "${record.eventType}", marking as FAILED`,
+      );
+      await this.markFailed(
+        record.id,
+        `No registered handlers for event type "${record.eventType}"`,
+      );
+      return false;
+    }
+
+    if (!hasDispatch(this.transport)) {
+      throw new Error(
+        'Outbox local mode requires a transport with dispatch(record, handlers)',
+      );
+    }
+
+    await this.transport.dispatch(
+      record,
+      handlers,
+      this.createHandlerContext(record),
+    );
+    return true;
   }
 
   private async fetchAndLock(): Promise<OutboxRecord[]> {
@@ -170,7 +246,15 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
         retry_count AS "retryCount",
         max_retries AS "maxRetries",
         last_error AS "lastError",
-        tenant_id AS "tenantId"
+        tenant_id AS "tenantId",
+        aggregate_type AS "aggregateType",
+        aggregate_id AS "aggregateId",
+        partition_key AS "partitionKey",
+        idempotency_key AS "idempotencyKey",
+        correlation_id AS "correlationId",
+        causation_id AS "causationId",
+        headers,
+        occurred_at AS "occurredAt"
     `;
   }
 
@@ -214,6 +298,10 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
             updated_at = NOW()
         WHERE id = ${record.id}::uuid
       `;
+      await this.runHook(
+        'onDeadLetter',
+        this.createRetryContext(record, error, newRetryCount),
+      );
     } else {
       this.logger.warn(
         `Event ${record.id} failed (retry ${newRetryCount}/${record.maxRetries}): ${errorMessage}`,
@@ -226,6 +314,10 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
             updated_at = NOW()
         WHERE id = ${record.id}::uuid
       `;
+      await this.runHook(
+        'onRetryScheduled',
+        this.createRetryContext(record, error, newRetryCount),
+      );
     }
   }
 
@@ -244,6 +336,63 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
       this.logger.warn(
         `Recovered ${recovered} stuck events from PROCESSING state`,
       );
+    }
+  }
+
+  private createHandlerContext(record: OutboxRecord): OutboxHandlerContext {
+    return {
+      record,
+      eventId: record.id,
+      eventType: record.eventType,
+      tenantId: record.tenantId,
+      retryCount: record.retryCount,
+      headers: record.headers,
+    };
+  }
+
+  private createDispatchContext(record: OutboxRecord): OutboxDispatchContext {
+    return {
+      record,
+      eventId: record.id,
+      eventType: record.eventType,
+      tenantId: record.tenantId,
+      retryCount: record.retryCount,
+      maxRetries: record.maxRetries,
+      aggregateType: record.aggregateType,
+      aggregateId: record.aggregateId,
+      partitionKey: record.partitionKey,
+      idempotencyKey: record.idempotencyKey,
+      correlationId: record.correlationId,
+      causationId: record.causationId,
+      headers: record.headers,
+    };
+  }
+
+  private createRetryContext(
+    record: OutboxRecord,
+    error: Error,
+    retryCount: number,
+  ): OutboxRetryContext {
+    return {
+      ...this.createDispatchContext(record),
+      error,
+      retryCount,
+      maxRetries: record.maxRetries,
+    };
+  }
+
+  private async runHook<K extends keyof OutboxHooks>(
+    name: K,
+    context: Parameters<NonNullable<OutboxHooks[K]>>[0],
+  ): Promise<void> {
+    const hook = this.options.hooks?.[name];
+    if (!hook) return;
+
+    try {
+      await hook(context as never);
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      this.logger.warn(`Outbox ${String(name)} hook failed: ${err.message}`);
     }
   }
 }

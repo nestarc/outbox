@@ -4,9 +4,11 @@ import { Test } from '@nestjs/testing';
 import { Injectable, type INestApplication } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 import { OutboxModule } from '../../src/outbox.module';
+import { OutboxAdminService } from '../../src/outbox.admin.service';
 import { OutboxEmitter } from '../../src/outbox.emitter';
 import { OutboxEvent } from '../../src/outbox.event';
 import { OnOutboxEvent } from '../../src/outbox.decorator';
+import type { OutboxHandlerContext } from '../../src/interfaces/outbox-handler-context.interface';
 
 // --- Test event ---
 class OrderCreatedEvent extends OutboxEvent {
@@ -39,10 +41,15 @@ class PrismaService extends PrismaClient {
 @Injectable()
 class TestListener {
   readonly received: Record<string, unknown>[] = [];
+  readonly contexts: OutboxHandlerContext[] = [];
 
   @OnOutboxEvent(OrderCreatedEvent)
-  async handleOrderCreated(payload: Record<string, unknown>) {
+  async handleOrderCreated(
+    payload: Record<string, unknown>,
+    context: OutboxHandlerContext,
+  ) {
     this.received.push(payload);
+    this.contexts.push(context);
   }
 }
 
@@ -56,6 +63,21 @@ class FailingListener {
     this.callCount++;
     if (this.callCount <= 2) {
       throw new Error(`Fail attempt ${this.callCount}`);
+    }
+  }
+}
+
+// --- Admin retry listener ---
+@Injectable()
+class ToggleFailingListener {
+  callCount = 0;
+  shouldFail = true;
+
+  @OnOutboxEvent(OrderCreatedEvent)
+  async handleOrderCreated() {
+    this.callCount++;
+    if (this.shouldFail) {
+      throw new Error('blocked by test');
     }
   }
 }
@@ -125,7 +147,17 @@ describe('Outbox E2E', () => {
 
     it('should emit event in transaction and deliver via poller', async () => {
       await prisma.$transaction(async (tx: any) => {
-        await emitter.emit(tx, new OrderCreatedEvent('order-1', 99.99));
+        await emitter.emit(tx, new OrderCreatedEvent('order-1', 99.99), {
+          tenantId: 'tenant-1',
+          aggregateType: 'Order',
+          aggregateId: 'order-1',
+          partitionKey: 'order-1',
+          idempotencyKey: 'idem-1',
+          correlationId: 'corr-1',
+          causationId: 'cause-1',
+          headers: { source: 'e2e' },
+          occurredAt: new Date('2026-01-02T03:04:05.000Z'),
+        });
       });
 
       // Verify PENDING record exists
@@ -134,6 +166,14 @@ describe('Outbox E2E', () => {
       `;
       expect(pending).toHaveLength(1);
       expect(pending[0].status).toBe('PENDING');
+      expect(pending[0].tenant_id).toBe('tenant-1');
+      expect(pending[0].aggregate_type).toBe('Order');
+      expect(pending[0].aggregate_id).toBe('order-1');
+      expect(pending[0].partition_key).toBe('order-1');
+      expect(pending[0].idempotency_key).toBe('idem-1');
+      expect(pending[0].correlation_id).toBe('corr-1');
+      expect(pending[0].causation_id).toBe('cause-1');
+      expect(pending[0].headers).toEqual({ source: 'e2e' });
 
       // Wait for poller to process
       await sleep(2000);
@@ -144,6 +184,14 @@ describe('Outbox E2E', () => {
         orderId: 'order-1',
         total: 99.99,
       });
+      expect(listener.contexts[0]).toEqual(
+        expect.objectContaining({
+          eventId: pending[0].id,
+          eventType: 'order.created',
+          tenantId: 'tenant-1',
+          headers: { source: 'e2e' },
+        }),
+      );
 
       // Verify status is SENT
       const sent = await prisma.$queryRaw<any[]>`
@@ -225,6 +273,69 @@ describe('Outbox E2E', () => {
       `;
       expect(records).toHaveLength(1);
       expect(records[0].status).toBe('SENT');
+    });
+  });
+
+  describe('admin retry flow', () => {
+    let app: INestApplication;
+    let emitter: OutboxEmitter;
+    let admin: OutboxAdminService;
+    let toggleListener: ToggleFailingListener;
+
+    beforeAll(async () => {
+      const module = await Test.createTestingModule({
+        imports: [
+          OutboxModule.forRoot({
+            prisma,
+            polling: { enabled: true, interval: 200, batchSize: 10 },
+            retry: { maxRetries: 1, backoff: 'fixed', initialDelay: 50 },
+          }),
+        ],
+        providers: [ToggleFailingListener],
+      }).compile();
+
+      app = module.createNestApplication();
+      await app.init();
+
+      emitter = module.get(OutboxEmitter);
+      admin = module.get(OutboxAdminService);
+      toggleListener = module.get(ToggleFailingListener);
+    });
+
+    afterAll(async () => {
+      await app.close();
+    });
+
+    it('should retry a failed event through OutboxAdminService', async () => {
+      await prisma.$transaction(async (tx: any) => {
+        await emitter.emit(tx, new OrderCreatedEvent('order-admin', 42));
+      });
+
+      await sleep(1000);
+
+      const failed = await prisma.$queryRaw<any[]>`
+        SELECT * FROM outbox_events WHERE event_type = 'order.created'
+      `;
+      expect(failed).toHaveLength(1);
+      expect(failed[0].status).toBe('FAILED');
+
+      const stats = await admin.getStats();
+      expect(stats.failed).toBe(1);
+
+      const listed = await admin.list({ status: 'FAILED' });
+      expect(listed).toHaveLength(1);
+      expect(listed[0].id).toBe(failed[0].id);
+
+      toggleListener.shouldFail = false;
+      await expect(admin.retry(failed[0].id)).resolves.toBe(true);
+
+      await sleep(1000);
+
+      const sent = await prisma.$queryRaw<any[]>`
+        SELECT * FROM outbox_events WHERE id = ${failed[0].id}::uuid
+      `;
+      expect(sent[0].status).toBe('SENT');
+      expect(toggleListener.callCount).toBeGreaterThanOrEqual(2);
     });
   });
 });

@@ -18,6 +18,14 @@ function createRecord(overrides?: Partial<OutboxRecord>): OutboxRecord {
     maxRetries: 5,
     lastError: null,
     tenantId: null,
+    aggregateType: null,
+    aggregateId: null,
+    partitionKey: null,
+    idempotencyKey: null,
+    correlationId: null,
+    causationId: null,
+    headers: {},
+    occurredAt: new Date(),
     ...overrides,
   };
 }
@@ -124,7 +132,15 @@ describe('OutboxPoller', () => {
       await poller.poll();
 
       expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
-      expect(transport.dispatch).toHaveBeenCalledWith(record, [handler]);
+      expect(transport.dispatch).toHaveBeenCalledWith(
+        record,
+        [handler],
+        expect.objectContaining({
+          eventId: record.id,
+          eventType: record.eventType,
+          tenantId: null,
+        }),
+      );
       expect(prisma.$executeRaw).toHaveBeenCalled();
     });
 
@@ -141,6 +157,70 @@ describe('OutboxPoller', () => {
       const call = prisma.$executeRaw.mock.calls[0];
       const sqlStrings = call[0].join('');
       expect(sqlStrings).toContain('FAILED');
+    });
+
+    it('should publish events in publisher mode without registered handlers', async () => {
+      const record = createRecord();
+      const prisma = createMockPrisma([record]);
+      const publisher = { publish: jest.fn().mockResolvedValue(undefined) };
+      const explorer = createMockExplorer({});
+
+      const poller = createPoller({
+        prisma,
+        transport: publisher,
+        explorer,
+        options: { delivery: { mode: 'publisher' } },
+      });
+      await poller.poll();
+
+      expect(explorer.getHandlers).not.toHaveBeenCalled();
+      expect(publisher.publish).toHaveBeenCalledWith(record);
+      const sql = prisma.$executeRaw.mock.calls[0][0].join('');
+      expect(sql).toContain('SENT');
+    });
+
+    it('should retry publisher mode failures without requiring handlers', async () => {
+      const record = createRecord({ retryCount: 1, maxRetries: 5 });
+      const prisma = createMockPrisma([record]);
+      const publisher = {
+        publish: jest.fn().mockRejectedValue(new Error('broker unavailable')),
+      };
+      const explorer = createMockExplorer({});
+
+      const poller = createPoller({
+        prisma,
+        transport: publisher,
+        explorer,
+        options: { delivery: { mode: 'publisher' } },
+      });
+      await poller.poll();
+
+      expect(explorer.getHandlers).not.toHaveBeenCalled();
+      expect(publisher.publish).toHaveBeenCalledWith(record);
+      const [strings, ...values] = prisma.$executeRaw.mock.calls[0];
+      expect(strings.join('')).toContain('PENDING');
+      expect(values).toContain(2);
+      expect(values).toContain('broker unavailable');
+    });
+
+    it('should support legacy dispatch transports in publisher mode without handlers', async () => {
+      const record = createRecord();
+      const prisma = createMockPrisma([record]);
+      const transport = createMockTransport();
+      const explorer = createMockExplorer({});
+
+      const poller = createPoller({
+        prisma,
+        transport,
+        explorer,
+        options: { delivery: { mode: 'publisher' } },
+      });
+      await poller.poll();
+
+      expect(explorer.getHandlers).not.toHaveBeenCalled();
+      expect(transport.dispatch).toHaveBeenCalledWith(record, []);
+      const sql = prisma.$executeRaw.mock.calls[0][0].join('');
+      expect(sql).toContain('SENT');
     });
 
     it('should revert to PENDING with incremented retry_count and last_error on failure', async () => {
@@ -250,6 +330,119 @@ describe('OutboxPoller', () => {
       const call = prisma.$executeRaw.mock.calls[0];
       const sqlStrings = call[0].join('');
       expect(sqlStrings).toContain('FAILED');
+    });
+
+    it('should call dispatch lifecycle hooks around successful delivery', async () => {
+      const record = createRecord({ tenantId: 'tenant-1', correlationId: 'corr-1' });
+      const prisma = createMockPrisma([record]);
+      const transport = createMockTransport();
+      const handler = { instance: {}, methodName: 'handle', eventTypes: ['order.created'] };
+      const explorer = createMockExplorer({ 'order.created': [handler] });
+      const hooks = {
+        onPollStart: jest.fn(),
+        onDispatchStart: jest.fn(),
+        onDispatchSuccess: jest.fn(),
+      };
+
+      const poller = createPoller({
+        prisma,
+        transport,
+        explorer,
+        options: { hooks },
+      });
+      await poller.poll();
+
+      expect(hooks.onPollStart).toHaveBeenCalledWith(
+        expect.objectContaining({ batchSize: 10 }),
+      );
+      expect(hooks.onDispatchStart).toHaveBeenCalledWith(
+        expect.objectContaining({ record, tenantId: 'tenant-1', correlationId: 'corr-1' }),
+      );
+      expect(hooks.onDispatchSuccess).toHaveBeenCalledWith(
+        expect.objectContaining({
+          record,
+          tenantId: 'tenant-1',
+          durationMs: expect.any(Number),
+        }),
+      );
+    });
+
+    it('should isolate hook errors from delivery state', async () => {
+      const record = createRecord();
+      const prisma = createMockPrisma([record]);
+      const transport = createMockTransport();
+      const handler = { instance: {}, methodName: 'handle', eventTypes: ['order.created'] };
+      const explorer = createMockExplorer({ 'order.created': [handler] });
+
+      const poller = createPoller({
+        prisma,
+        transport,
+        explorer,
+        options: {
+          hooks: {
+            onDispatchStart: jest.fn().mockRejectedValue(new Error('hook failed')),
+          },
+        },
+      });
+      await poller.poll();
+
+      expect(transport.dispatch).toHaveBeenCalled();
+      const sql = prisma.$executeRaw.mock.calls[0][0].join('');
+      expect(sql).toContain('SENT');
+    });
+
+    it('should call retry hook on retriable failures', async () => {
+      const record = createRecord({ retryCount: 1, maxRetries: 5 });
+      const prisma = createMockPrisma([record]);
+      const transport = createMockTransport();
+      transport.dispatch.mockRejectedValue(new Error('handler failed'));
+      const handler = { instance: {}, methodName: 'handle', eventTypes: ['order.created'] };
+      const explorer = createMockExplorer({ 'order.created': [handler] });
+      const hooks = {
+        onDispatchFailure: jest.fn(),
+        onRetryScheduled: jest.fn(),
+        onDeadLetter: jest.fn(),
+      };
+
+      const poller = createPoller({
+        prisma,
+        transport,
+        explorer,
+        options: { hooks },
+      });
+      await poller.poll();
+
+      expect(hooks.onDispatchFailure).toHaveBeenCalledWith(
+        expect.objectContaining({ error: expect.any(Error), durationMs: expect.any(Number) }),
+      );
+      expect(hooks.onRetryScheduled).toHaveBeenCalledWith(
+        expect.objectContaining({ record, retryCount: 2, maxRetries: 5 }),
+      );
+      expect(hooks.onDeadLetter).not.toHaveBeenCalled();
+    });
+
+    it('should call dead-letter hook when max retries are exhausted', async () => {
+      const record = createRecord({ retryCount: 2, maxRetries: 3 });
+      const prisma = createMockPrisma([record]);
+      const transport = createMockTransport();
+      transport.dispatch.mockRejectedValue(new Error('still failing'));
+      const handler = { instance: {}, methodName: 'handle', eventTypes: ['order.created'] };
+      const explorer = createMockExplorer({ 'order.created': [handler] });
+      const hooks = {
+        onDeadLetter: jest.fn(),
+      };
+
+      const poller = createPoller({
+        prisma,
+        transport,
+        explorer,
+        options: { hooks },
+      });
+      await poller.poll();
+
+      expect(hooks.onDeadLetter).toHaveBeenCalledWith(
+        expect.objectContaining({ record, retryCount: 3, maxRetries: 3 }),
+      );
     });
   });
 

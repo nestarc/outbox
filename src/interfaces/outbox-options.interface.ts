@@ -1,4 +1,9 @@
 import type { ModuleMetadata, Type } from '@nestjs/common';
+import type { OutboxHooks } from './outbox-hooks.interface';
+import type { OutboxPublisher } from './outbox-publisher.interface';
+import type { OutboxTenancyOptions } from './outbox-tenancy.interface';
+import type { OutboxTransport } from './outbox-transport.interface';
+import type { OutboxWakeupOptions } from './outbox-wakeup.interface';
 
 export interface OutboxPollingOptions {
   enabled?: boolean;
@@ -12,6 +17,10 @@ export interface OutboxRetryOptions {
   initialDelay?: number;
 }
 
+export interface OutboxDeliveryOptions {
+  mode?: 'local' | 'publisher';
+}
+
 export interface OutboxOptions {
   /**
    * forRoot: PrismaService class reference (resolved via DI, must be in a @Global module).
@@ -22,7 +31,11 @@ export interface OutboxOptions {
   polling?: OutboxPollingOptions;
   retry?: OutboxRetryOptions;
   /** Custom transport class. Defaults to LocalTransport (in-process handler invocation). */
-  transport?: Type;
+  transport?: Type<OutboxTransport | OutboxPublisher>;
+  delivery?: OutboxDeliveryOptions;
+  tenancy?: OutboxTenancyOptions;
+  hooks?: OutboxHooks;
+  wakeup?: OutboxWakeupOptions;
   events?: Type[];
   isGlobal?: boolean;
   stuckThreshold?: number;
@@ -34,7 +47,7 @@ export interface OutboxAsyncOptions extends Pick<ModuleMetadata, 'imports'> {
   useClass?: Type<OutboxOptionsFactory>;
   useExisting?: Type<OutboxOptionsFactory>;
   /** Custom transport class. Defaults to LocalTransport. */
-  transport?: Type;
+  transport?: Type<OutboxTransport | OutboxPublisher>;
   isGlobal?: boolean;
 }
 

@@ -6,9 +6,15 @@ import {
 } from '@nestjs/common';
 import { DiscoveryModule } from '@nestjs/core';
 import { ScheduleModule } from '@nestjs/schedule';
-import { OUTBOX_OPTIONS, OUTBOX_TRANSPORT } from './outbox.constants';
+import {
+  OUTBOX_OPTIONS,
+  OUTBOX_TENANT_PROVIDER,
+  OUTBOX_TRANSPORT,
+} from './outbox.constants';
+import { OutboxAdminService } from './outbox.admin.service';
 import { OutboxEmitter } from './outbox.emitter';
 import { OutboxExplorer } from './outbox.explorer';
+import { OutboxListener } from './outbox.listener';
 import { OutboxPoller } from './outbox.poller';
 import { LocalTransport } from './transports/local.transport';
 import type {
@@ -16,6 +22,7 @@ import type {
   OutboxOptions,
   OutboxOptionsFactory,
 } from './interfaces/outbox-options.interface';
+import type { OutboxTenantProvider } from './interfaces/outbox-tenancy.interface';
 
 @Module({})
 export class OutboxModule {
@@ -41,6 +48,9 @@ export class OutboxModule {
       provide: OUTBOX_TRANSPORT,
       useClass: options.transport ?? LocalTransport,
     };
+    const tenantProvider = this.createTenantProvider(
+      options.tenancy?.provider,
+    );
 
     return {
       module: OutboxModule,
@@ -49,11 +59,20 @@ export class OutboxModule {
       providers: [
         optionsProvider,
         transportProvider,
+        tenantProvider,
+        OutboxAdminService,
         OutboxEmitter,
         OutboxPoller,
+        OutboxListener,
         OutboxExplorer,
       ],
-      exports: [OutboxEmitter, OUTBOX_OPTIONS, OUTBOX_TRANSPORT],
+      exports: [
+        OutboxAdminService,
+        OutboxEmitter,
+        OUTBOX_OPTIONS,
+        OUTBOX_TRANSPORT,
+        OUTBOX_TENANT_PROVIDER,
+      ],
     };
   }
 
@@ -64,6 +83,7 @@ export class OutboxModule {
       provide: OUTBOX_TRANSPORT,
       useClass: options.transport ?? LocalTransport,
     };
+    const tenantProvider = this.createAsyncTenantProvider();
 
     return {
       module: OutboxModule,
@@ -76,11 +96,58 @@ export class OutboxModule {
       providers: [
         ...asyncProviders,
         transportProvider,
+        tenantProvider,
+        OutboxAdminService,
         OutboxEmitter,
         OutboxPoller,
+        OutboxListener,
         OutboxExplorer,
       ],
-      exports: [OutboxEmitter, OUTBOX_OPTIONS, OUTBOX_TRANSPORT],
+      exports: [
+        OutboxAdminService,
+        OutboxEmitter,
+        OUTBOX_OPTIONS,
+        OUTBOX_TRANSPORT,
+        OUTBOX_TENANT_PROVIDER,
+      ],
+    };
+  }
+
+  private static createTenantProvider(
+    provider?: Type<OutboxTenantProvider> | OutboxTenantProvider,
+  ): Provider {
+    if (!provider) {
+      return {
+        provide: OUTBOX_TENANT_PROVIDER,
+        useValue: null,
+      };
+    }
+
+    if (typeof provider === 'function') {
+      return {
+        provide: OUTBOX_TENANT_PROVIDER,
+        useClass: provider,
+      };
+    }
+
+    return {
+      provide: OUTBOX_TENANT_PROVIDER,
+      useValue: provider,
+    };
+  }
+
+  private static createAsyncTenantProvider(): Provider {
+    return {
+      provide: OUTBOX_TENANT_PROVIDER,
+      inject: [OUTBOX_OPTIONS],
+      useFactory: (options: OutboxOptions): OutboxTenantProvider | null => {
+        const provider = options.tenancy?.provider;
+        if (!provider) return null;
+        if (typeof provider === 'function') {
+          return new provider();
+        }
+        return provider;
+      },
     };
   }
 

@@ -10,6 +10,14 @@ CREATE TABLE IF NOT EXISTS outbox_events (
   max_retries   INT NOT NULL DEFAULT 5,
   last_error    TEXT,
   tenant_id     VARCHAR(255),
+  aggregate_type VARCHAR(255),
+  aggregate_id   VARCHAR(255),
+  partition_key  VARCHAR(255),
+  idempotency_key VARCHAR(255),
+  correlation_id VARCHAR(255),
+  causation_id   VARCHAR(255),
+  headers       JSONB NOT NULL DEFAULT '{}'::jsonb,
+  occurred_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
   CONSTRAINT chk_status CHECK (status IN ('PENDING', 'PROCESSING', 'SENT', 'FAILED'))
 );
@@ -28,3 +36,13 @@ CREATE INDEX IF NOT EXISTS idx_outbox_processing
 CREATE INDEX IF NOT EXISTS idx_outbox_failed
   ON outbox_events (created_at DESC)
   WHERE status = 'FAILED';
+
+-- Aggregate replay and per-aggregate ordering
+CREATE INDEX IF NOT EXISTS idx_outbox_aggregate
+  ON outbox_events (aggregate_type, aggregate_id, created_at ASC)
+  WHERE aggregate_id IS NOT NULL;
+
+-- Tenant-aware polling/admin queries
+CREATE INDEX IF NOT EXISTS idx_outbox_tenant_pending
+  ON outbox_events (tenant_id, created_at ASC)
+  WHERE status = 'PENDING' AND tenant_id IS NOT NULL;

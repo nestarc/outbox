@@ -4,6 +4,26 @@ All notable changes to `@nestarc/outbox` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] — 2026-06-17
+
+### Added
+
+- **Broker-capable publisher mode** — `delivery.mode: 'publisher'` sends `OutboxRecord` objects to an `OutboxPublisher` without requiring local handlers.
+- **Stable event metadata** — `OutboxEmitOptions` stores tenant id, aggregate type/id, partition key, idempotency key, correlation/causation ids, headers, and occurred-at timestamp.
+- **Handler context** — local handlers receive `OutboxHandlerContext` as a second argument with event id, type, tenant id, retry count, headers, and the full record.
+- **Tenant propagation** — optional `OutboxTenantProvider` resolves tenant ids at emit time and restores tenant context for local handlers when `runWithTenant()` is available.
+- **Admin/DLQ API** — `OutboxAdminService` exposes stats, list, lookup, retry, retryMany, markFailed, purgeSent, and health methods.
+- **Observability hooks** — `OutboxHooks` callbacks cover emit, poll start, dispatch start/success/failure, retry scheduling, and dead-letter events. Hook errors are isolated from delivery state.
+- **PostgreSQL wakeup** — optional `wakeup.enabled` support sends `pg_notify()` after event writes and listens with `pg` when installed, while keeping polling as fallback.
+- **Bulk `emitMany()`** — uses a single parameterized multi-row insert when the Prisma transaction client exposes `$executeRawUnsafe`.
+- **Upgrade SQL** — `src/sql/upgrade-0.1-to-0.2.sql` adds v0.2 metadata columns and indexes idempotently.
+
+### Changed
+
+- `OutboxRecord` now includes metadata fields and `headers`.
+- `OutboxTransport.dispatch()` accepts an optional `OutboxHandlerContext` third argument.
+- `create-outbox-table.sql` now creates v0.2 metadata columns and aggregate/tenant indexes for new installs.
+
 ## [0.1.0] — 2026-04-11
 
 Initial release. Prisma-native transactional outbox for NestJS.
