@@ -69,6 +69,20 @@ describe('OutboxAdminService', () => {
     });
   });
 
+  it('should default stats to zeros when the aggregate query returns no rows', async () => {
+    const { service, prisma } = createService();
+    prisma.$queryRaw.mockResolvedValue([]);
+
+    await expect(service.getStats()).resolves.toEqual({
+      pending: 0,
+      processing: 0,
+      sent: 0,
+      failed: 0,
+      oldestPendingAgeMs: null,
+      oldestProcessingAgeMs: null,
+    });
+  });
+
   it('should list records with parameterized filters', async () => {
     const { service, prisma } = createService();
     prisma.$queryRawUnsafe.mockResolvedValue([createDbRow()]);
@@ -107,6 +121,42 @@ describe('OutboxAdminService', () => {
     );
   });
 
+  it('should list records with default filters and clamp limit to the allowed range', async () => {
+    const { service, prisma } = createService();
+    prisma.$queryRawUnsafe.mockResolvedValue([
+      createDbRow({
+        payload: '{"orderId":"order-1"}',
+        headers: '{"retry":2}',
+        processed_at: '2026-01-02T03:04:05.000Z',
+        occurred_at: '2026-01-02T03:04:05.000Z',
+      }),
+    ]);
+
+    const rows = await service.list({ limit: 9999 });
+
+    const [sql, ...values] = prisma.$queryRawUnsafe.mock.calls[0];
+    expect(sql).not.toContain('WHERE');
+    expect(values).toEqual([500]);
+    expect(rows[0]).toEqual(
+      expect.objectContaining({
+        payload: { orderId: 'order-1' },
+        headers: { retry: '2' },
+        processedAt: now,
+        occurredAt: now,
+      }),
+    );
+  });
+
+  it('should clamp list limit to at least one', async () => {
+    const { service, prisma } = createService();
+    prisma.$queryRawUnsafe.mockResolvedValue([]);
+
+    await service.list({ limit: 0 });
+
+    const [, ...values] = prisma.$queryRawUnsafe.mock.calls[0];
+    expect(values).toEqual([1]);
+  });
+
   it('should get a record by id', async () => {
     const { service, prisma } = createService();
     prisma.$queryRawUnsafe.mockResolvedValue([createDbRow({ id: 'evt-2' })]);
@@ -127,6 +177,16 @@ describe('OutboxAdminService', () => {
     await expect(service.getById('evt-missing')).resolves.toBeNull();
   });
 
+  it('should reject dynamic queries when prisma lacks $queryRawUnsafe', async () => {
+    const service = new OutboxAdminService({
+      prisma: { $queryRaw: jest.fn(), $executeRaw: jest.fn() },
+    });
+
+    await expect(service.list()).rejects.toThrow(
+      'OutboxAdminService requires prisma.$queryRawUnsafe',
+    );
+  });
+
   it('should retry only FAILED records and keep retry_count', async () => {
     const { service, prisma } = createService();
     prisma.$executeRawUnsafe.mockResolvedValue(1);
@@ -140,6 +200,23 @@ describe('OutboxAdminService', () => {
     expect(sql).toContain('status = $2');
     expect(sql).not.toContain('retry_count = 0');
     expect(values).toEqual(['evt-1', 'FAILED']);
+  });
+
+  it('should return false when retry updates no rows', async () => {
+    const { service, prisma } = createService();
+    prisma.$executeRawUnsafe.mockResolvedValue(0);
+
+    await expect(service.retry('evt-1')).resolves.toBe(false);
+  });
+
+  it('should reject dynamic updates when prisma lacks $executeRawUnsafe', async () => {
+    const service = new OutboxAdminService({
+      prisma: { $queryRaw: jest.fn(), $executeRaw: jest.fn() },
+    });
+
+    await expect(service.retry('evt-1')).rejects.toThrow(
+      'OutboxAdminService requires prisma.$executeRawUnsafe',
+    );
   });
 
   it('should retry many failed records', async () => {
@@ -171,6 +248,13 @@ describe('OutboxAdminService', () => {
     expect(sql).toContain("status = 'FAILED'");
     expect(sql).toContain('last_error = $2');
     expect(values).toEqual(['evt-1', 'manual stop']);
+  });
+
+  it('should return false when markFailed updates no rows', async () => {
+    const { service, prisma } = createService();
+    prisma.$executeRawUnsafe.mockResolvedValue(0);
+
+    await expect(service.markFailed('evt-1', 'manual stop')).resolves.toBe(false);
   });
 
   it('should purge only SENT rows older than the cutoff', async () => {
@@ -212,6 +296,31 @@ describe('OutboxAdminService', () => {
         'oldest pending event age 60000ms exceeds threshold 30000ms',
         'failed event count 3 exceeds threshold 1',
       ],
+    });
+  });
+
+  it('should report healthy when thresholds are not exceeded', async () => {
+    const { service, prisma } = createService();
+    prisma.$queryRaw.mockResolvedValue([
+      {
+        pending: '0',
+        processing: '0',
+        sent: '10',
+        failed: '0',
+        oldest_pending_age_ms: null,
+        oldest_processing_age_ms: null,
+      },
+    ]);
+
+    await expect(
+      service.getHealth({
+        maxOldestPendingAgeMs: 30000,
+        maxFailedCount: 1,
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      stats: expect.objectContaining({ sent: 10, failed: 0 }),
+      reasons: [],
     });
   });
 });
