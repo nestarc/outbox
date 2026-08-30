@@ -4,6 +4,19 @@ All notable changes to `@nestarc/outbox` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] — 2026-08-30
+
+### Changed
+
+- Added `@prisma/client` 7.x to the supported peer range while preserving Prisma 5.x and 6.x compatibility.
+- Added a Prisma 7 generated-client and required `PrismaPg` adapter E2E path while preserving the Prisma 6 `prisma-client-js` native-engine runtime lane.
+- Added an isolated strict consumer gate that installs the packed package with exact NestJS 11.2.1 and Prisma 7.10.0 versions, verifies tarball provenance, compiles public types, and exercises commit, polling, admin stats, and rollback against PostgreSQL.
+- Release verification now runs the real PostgreSQL E2E and strict packed modern-consumer gates explicitly.
+
+### Fixed
+
+- The E2E migration loader now applies and asserts all shipped partial indexes instead of dropping statements preceded by SQL comments.
+
 ## [0.2.0] — 2026-06-17
 
 ### Added
