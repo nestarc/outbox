@@ -5,7 +5,10 @@ name: CI
 # Three stages:
 #   1. lint  — fast static checks (eslint + type-check). Fails early before
 #              burning matrix CI minutes.
-#   2. test  — matrix (Node x NestJS) unit + e2e + coverage. Gated behind
+#   2. test  — legacy and modern runtime tuples run unit + e2e + coverage.
+#              The primary modern cell also installs the packed tarball into
+#              an isolated strict consumer and exercises it against PostgreSQL.
+#              Gated behind
 #              lint so invalid code never reaches the matrix.
 #              PostgreSQL service container provides a real database for E2E.
 #   3. pack  — clean build + `npm pack --dry-run` to prove the tarball is
@@ -57,7 +60,7 @@ jobs:
         run: npx tsc --noEmit -p tsconfig.build.json
 
   test:
-    name: Test (Node ${{ matrix.node }} x NestJS ${{ matrix.nestjs }})
+    name: Test (Node ${{ matrix.node }} x NestJS ${{ matrix.nestjs }} x Prisma ${{ matrix.prisma }})
     needs: lint
     runs-on: ubuntu-latest
 
@@ -71,7 +74,7 @@ jobs:
         ports:
           - 5433:5432
         options: >-
-          --health-cmd "pg_isready -U test"
+          --health-cmd "pg_isready -U test -d outbox_test"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 5
@@ -79,8 +82,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: ['20', '22']
-        nestjs: ['10', '11']
+        include:
+          - node: '20'
+            nestjs: '10.4.22'
+            schedule: '4.1.2'
+            prisma: '6.19.3'
+          - node: '20'
+            nestjs: '11.2.1'
+            schedule: '5.0.1'
+            prisma: '7.10.0'
+          - node: '22'
+            nestjs: '10.4.22'
+            schedule: '4.1.2'
+            prisma: '6.19.3'
+          - node: '22'
+            nestjs: '11.2.1'
+            schedule: '5.0.1'
+            prisma: '7.10.0'
 
     env:
       DATABASE_URL: postgresql://test:test@localhost:5433/outbox_test
@@ -98,21 +116,27 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # For the v10 matrix cell, swap the dev-installed NestJS packages to
-      # the v10 major so the unit + e2e suites actually exercise the older
-      # runtime.
-      - name: Install NestJS v10 (matrix override)
-        if: matrix.nestjs == '10'
+      - name: Install exact runtime tuple
         run: |
-          npm install --no-save \
-            @nestjs/common@^10 \
-            @nestjs/core@^10 \
-            @nestjs/platform-express@^10 \
-            @nestjs/testing@^10 \
-            @nestjs/schedule@^4
+          npm install --no-save --strict-peer-deps --no-audit --no-fund \
+            @nestjs/common@${{ matrix.nestjs }} \
+            @nestjs/core@${{ matrix.nestjs }} \
+            @nestjs/platform-express@${{ matrix.nestjs }} \
+            @nestjs/testing@${{ matrix.nestjs }} \
+            @nestjs/schedule@${{ matrix.schedule }} \
+            prisma@${{ matrix.prisma }} \
+            @prisma/client@${{ matrix.prisma }} \
+            @prisma/adapter-pg@${{ matrix.prisma }}
 
-      - name: Generate Prisma client
-        run: npm run prisma:generate
+      - name: Assert exact runtime tuple
+        run: |
+          node scripts/assert-installed-versions.js \
+            "@nestjs/common@${{ matrix.nestjs }}" \
+            "@nestjs/core@${{ matrix.nestjs }}" \
+            "@nestjs/schedule@${{ matrix.schedule }}" \
+            "prisma@${{ matrix.prisma }}" \
+            "@prisma/client@${{ matrix.prisma }}" \
+            "@prisma/adapter-pg@${{ matrix.prisma }}"
 
       - name: Unit tests
         run: npm test
@@ -120,12 +144,16 @@ jobs:
       - name: E2E tests
         run: npm run test:e2e
 
+      - name: Strict packed modern consumer with PostgreSQL
+        if: matrix.node == '22' && matrix.nestjs == '11.2.1' && matrix.prisma == '7.10.0'
+        run: npm run test:modern-consumer
+
       - name: Coverage (primary cell only)
-        if: matrix.node == '20' && matrix.nestjs == '11'
+        if: matrix.node == '22' && matrix.nestjs == '11.2.1' && matrix.prisma == '7.10.0'
         run: npm run test:cov
 
       - name: Upload coverage artifact
-        if: matrix.node == '20' && matrix.nestjs == '11'
+        if: matrix.node == '22' && matrix.nestjs == '11.2.1' && matrix.prisma == '7.10.0'
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report

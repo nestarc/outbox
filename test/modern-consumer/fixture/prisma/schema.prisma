@@ -1,0 +1,16 @@
+generator client {
+  provider            = "prisma-client"
+  output              = "../generated"
+  moduleFormat        = "cjs"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model ConsumerProbe {
+  id String @id @default(uuid()) @db.Uuid
+
+  @@map("consumer_probe")
+}

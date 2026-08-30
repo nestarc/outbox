@@ -14,6 +14,26 @@ npm install @nestarc/outbox @nestjs/schedule @prisma/client
 > `@nestjs/schedule` and `@prisma/client` are peer dependencies and must be installed alongside this package.
 > PostgreSQL `LISTEN/NOTIFY` wakeup support uses `pg` as an optional peer dependency. Install `pg` only when you enable `wakeup.enabled`.
 
+### Prisma 7
+
+`@nestarc/outbox` supports Prisma 5, 6, and 7 clients. Prisma 7 requires a driver adapter when your application constructs `PrismaClient`; for PostgreSQL, install and configure `@prisma/adapter-pg` and `pg`:
+
+```bash
+npm install @prisma/adapter-pg pg
+```
+
+```typescript
+import { PrismaPg } from '@prisma/adapter-pg';
+import { PrismaClient } from './generated/prisma/client';
+
+const adapter = new PrismaPg({
+  connectionString: process.env.DATABASE_URL,
+});
+export const prisma = new PrismaClient({ adapter });
+```
+
+Pass that configured client (or your Nest `PrismaService` wrapper) to `OutboxModule`. Outbox does not create or replace the application's Prisma client or connection pool.
+
 ## Quick Start
 
 ### 1. Register the module

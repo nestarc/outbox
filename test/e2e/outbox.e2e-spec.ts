@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Test } from '@nestjs/testing';
 import { Injectable, type INestApplication } from '@nestjs/common';
-import { PrismaClient } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
 import { OutboxModule } from '../../src/outbox.module';
 import { OutboxAdminService } from '../../src/outbox.admin.service';
 import { OutboxEmitter } from '../../src/outbox.emitter';
@@ -18,22 +18,6 @@ class OrderCreatedEvent extends OutboxEvent {
     public readonly total: number,
   ) {
     super();
-  }
-}
-
-// --- Test PrismaService ---
-@Injectable()
-class PrismaService extends PrismaClient {
-  constructor() {
-    super({
-      datasources: {
-        db: {
-          url:
-            process.env.DATABASE_URL ??
-            'postgresql://test:test@localhost:5433/outbox_test',
-        },
-      },
-    });
   }
 }
 
@@ -87,21 +71,44 @@ const MIGRATION_SQL_FILE = fs.readFileSync(
   'utf-8',
 );
 
-// Split multi-statement SQL for Prisma's $executeRawUnsafe (single statement only)
-const MIGRATION_STATEMENTS = MIGRATION_SQL_FILE
+// Split multi-statement SQL for Prisma's $executeRawUnsafe (single statement only).
+// Remove full-line comments first so a comment cannot hide the following statement.
+const MIGRATION_STATEMENTS = MIGRATION_SQL_FILE.replace(/^\s*--.*$/gm, '')
   .split(';')
   .map((s) => s.trim())
-  .filter((s) => s.length > 0 && !s.startsWith('--'));
+  .filter((s) => s.length > 0);
 
 async function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 describe('Outbox E2E', () => {
-  let prisma: PrismaService;
+  let prisma: any;
 
   beforeAll(async () => {
-    prisma = new PrismaService();
+    const connectionString =
+      process.env.DATABASE_URL ??
+      'postgresql://test:test@localhost:5433/outbox_test';
+    const prismaVersion = JSON.parse(
+      fs.readFileSync(
+        path.join(process.cwd(), 'node_modules', '@prisma', 'client', 'package.json'),
+        'utf8',
+      ),
+    ).version as string;
+
+    if (Number(prismaVersion.split('.')[0]) >= 7) {
+      const { PrismaClient } = await import(
+        path.join(__dirname, 'generated', 'client')
+      );
+      prisma = new PrismaClient({
+        adapter: new PrismaPg({ connectionString }),
+      });
+    } else {
+      process.env.DATABASE_URL = connectionString;
+      const LegacyPrismaClient = (await import('@prisma/client'))
+        .PrismaClient as unknown as new () => any;
+      prisma = new LegacyPrismaClient();
+    }
     await prisma.$connect();
     for (const stmt of MIGRATION_STATEMENTS) {
       await prisma.$executeRawUnsafe(stmt);
@@ -115,6 +122,30 @@ describe('Outbox E2E', () => {
 
   beforeEach(async () => {
     await prisma.$executeRawUnsafe('TRUNCATE outbox_events');
+  });
+
+  it('should apply the complete table and index migration', async () => {
+    const indexes = await prisma.$queryRaw<Array<{ indexname: string }>>`
+      SELECT indexname::text AS indexname
+      FROM pg_indexes
+      WHERE schemaname = current_schema()
+        AND tablename = 'outbox_events'
+    `;
+
+    expect(
+      indexes
+        .map((row: { indexname: string }) => row.indexname)
+        .sort(),
+    ).toEqual(
+      expect.arrayContaining([
+        'idx_outbox_aggregate',
+        'idx_outbox_failed',
+        'idx_outbox_pending',
+        'idx_outbox_processing',
+        'idx_outbox_tenant_pending',
+        'outbox_events_pkey',
+      ]),
+    );
   });
 
   describe('basic flow', () => {

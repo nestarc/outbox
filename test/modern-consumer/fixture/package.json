@@ -1,0 +1,11 @@
+{
+  "name": "@nestarc/outbox-modern-consumer-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "prisma:generate": "prisma generate",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "smoke": "node dist/src/smoke.js"
+  }
+}

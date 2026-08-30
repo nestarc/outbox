@@ -5,8 +5,9 @@ name: Release
 #
 # Flow:
 #   1. verify job reads package.json version and confirms it matches the tag.
-#   2. build-and-test runs the full prepublishOnly chain as a final safety net.
-#      PostgreSQL service container is required for E2E tests in prepublishOnly.
+#   2. build-and-test runs the prepublishOnly chain, the exact modern
+#      NestJS 11 / Prisma 7 PostgreSQL gates, then the preserved legacy
+#      NestJS 10 / Prisma 6 unit and PostgreSQL runtime lane.
 #   3. publish runs `npm publish --provenance --access public` through npm
 #      Trusted Publishing and creates a GitHub Release with the CHANGELOG
 #      excerpt.
@@ -98,7 +99,7 @@ jobs:
         ports:
           - 5433:5432
         options: >-
-          --health-cmd "pg_isready -U test"
+          --health-cmd "pg_isready -U test -d outbox_test"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 5
@@ -113,18 +114,49 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
           registry-url: https://registry.npmjs.org
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Generate Prisma client
-        run: npm run prisma:generate
-
-      - name: Clean + lint + test + build
+      - name: Clean + lint + unit test + build
         run: npm run prepublishOnly
+
+      - name: Prisma 7.10.0 PostgreSQL E2E
+        run: npm run test:e2e
+
+      - name: Strict packed NestJS 11.2.1 + Prisma 7.10.0 consumer
+        run: npm run test:modern-consumer
+
+      - name: Install exact legacy NestJS 10.4.22 + Prisma 6.19.3 tuple
+        run: |
+          npm install --no-save --strict-peer-deps --no-audit --no-fund \
+            @nestjs/common@10.4.22 \
+            @nestjs/core@10.4.22 \
+            @nestjs/platform-express@10.4.22 \
+            @nestjs/testing@10.4.22 \
+            @nestjs/schedule@4.1.2 \
+            prisma@6.19.3 \
+            @prisma/client@6.19.3 \
+            @prisma/adapter-pg@6.19.3
+
+      - name: Assert exact legacy runtime tuple
+        run: |
+          node scripts/assert-installed-versions.js \
+            "@nestjs/common@10.4.22" \
+            "@nestjs/core@10.4.22" \
+            "@nestjs/schedule@4.1.2" \
+            "prisma@6.19.3" \
+            "@prisma/client@6.19.3" \
+            "@prisma/adapter-pg@6.19.3"
+
+      - name: Legacy unit tests
+        run: npm test
+
+      - name: Legacy Prisma 6.19.3 PostgreSQL E2E
+        run: npm run test:e2e
 
       - name: Pack (dry run)
         run: npm pack --dry-run

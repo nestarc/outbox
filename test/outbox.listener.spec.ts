@@ -164,6 +164,7 @@ describe('OutboxListener', () => {
       },
       poller,
     );
+    jest.spyOn(listener as any, 'loadPgClient').mockReturnValue(null);
 
     await expect(listener.onModuleInit()).resolves.toBeUndefined();
   });

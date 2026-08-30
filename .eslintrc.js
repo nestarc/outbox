@@ -15,7 +15,13 @@ module.exports = {
     node: true,
     jest: true,
   },
-  ignorePatterns: ['dist/', 'coverage/', 'jest.config.ts'],
+  ignorePatterns: [
+    'dist/',
+    'coverage/',
+    'test/e2e/generated/',
+    'test/modern-consumer/fixture/',
+    'jest.config.ts',
+  ],
   rules: {
     '@typescript-eslint/no-explicit-any': 'off',
   },
