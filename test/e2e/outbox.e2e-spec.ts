@@ -95,8 +95,9 @@ describe('Outbox E2E', () => {
         'utf8',
       ),
     ).version as string;
+    const prismaMajor = Number(prismaVersion.split('.')[0]);
 
-    if (Number(prismaVersion.split('.')[0]) >= 7) {
+    if (prismaMajor >= 7) {
       const { PrismaClient } = await import(
         path.join(__dirname, 'generated', 'client')
       );
@@ -105,8 +106,11 @@ describe('Outbox E2E', () => {
       });
     } else {
       process.env.DATABASE_URL = connectionString;
-      const LegacyPrismaClient = (await import('@prisma/client'))
-        .PrismaClient as unknown as new () => any;
+      const { PrismaClient: LegacyPrismaClient } = (await import(
+        '@prisma/client'
+      )) as unknown as {
+        PrismaClient: new () => any;
+      };
       prisma = new LegacyPrismaClient();
     }
     await prisma.$connect();
