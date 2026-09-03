@@ -735,12 +735,12 @@ Outbox ── durable record / publisher callback ──> Jobs adapter ──> J
 
 ## 9. 작업 기록
 
-| 날짜       | Task        | 상태   | ref/PR                                       | 검증 결과                                                                                 | 다음 정확한 행동                                                       |
-| ---------- | ----------- | ------ | -------------------------------------------- | ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| 2026-09-02 | 계획 기준선 | `DONE` | `origin/main@873f95b` 조사                   | unit 88, lint/typecheck/coverage/audit 기록; fresh DB E2E 미실행                          | `OUT-PLAN-01`로 이 문서만 먼저 review/merge                            |
-| 2026-09-03 | `OUT-M01`   | `DONE` | `codex/out-m01-fenced-claims` working tree   | unit 95, lint/typecheck/build PASS; PostgreSQL E2E 13 PASS; packed Prisma 7 consumer PASS | 변경 review 후 branch를 commit/push하고 `OUT-M04A` 또는 `OUT-M03` 진행 |
-| 2026-09-03 | `OUT-M03`   | `DONE` | `901865c`                                    | unit 100, lint/typecheck/clean build PASS; timer/notification burst/shutdown race PASS    | local main merge `ad96d8e`에서 `OUT-M02` 진행                          |
-| 2026-09-03 | `OUT-M02`   | `DONE` | `codex/out-m02-lease-heartbeat` working tree | unit 110, PostgreSQL E2E 16, packed Prisma 7 consumer, coverage/lint/typecheck/build PASS | 변경 review 후 branch를 commit/push/merge하고 `OUT-M04A` 진행          |
+| 날짜       | Task        | 상태   | ref/PR                                     | 검증 결과                                                                                 | 다음 정확한 행동                                                       |
+| ---------- | ----------- | ------ | ------------------------------------------ | ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| 2026-09-02 | 계획 기준선 | `DONE` | `origin/main@873f95b` 조사                 | unit 88, lint/typecheck/coverage/audit 기록; fresh DB E2E 미실행                          | `OUT-PLAN-01`로 이 문서만 먼저 review/merge                            |
+| 2026-09-03 | `OUT-M01`   | `DONE` | `codex/out-m01-fenced-claims` working tree | unit 95, lint/typecheck/build PASS; PostgreSQL E2E 13 PASS; packed Prisma 7 consumer PASS | 변경 review 후 branch를 commit/push하고 `OUT-M04A` 또는 `OUT-M03` 진행 |
+| 2026-09-03 | `OUT-M03`   | `DONE` | `901865c`                                  | unit 100, lint/typecheck/clean build PASS; timer/notification burst/shutdown race PASS    | local main merge `ad96d8e`에서 `OUT-M02` 진행                          |
+| 2026-09-03 | `OUT-M02`   | `DONE` | `a14d119`                                  | unit 110, PostgreSQL E2E 16, packed Prisma 7 consumer, coverage/lint/typecheck/build PASS | local main merge `95b4849` 완료; `OUT-M04A` 진행                       |
 
 ### `OUT-M01` 종료 인계
 
@@ -777,12 +777,12 @@ Next exact action: 완료. local main merge ad96d8e에서 OUT-M02를 시작했�
 ```text
 Task: OUT-M02
 State: DONE
-Start ref / end ref: local main@ad96d8e / codex/out-m02-lease-heartbeat working tree (uncommitted)
+Start ref / end ref: local main@ad96d8e / a14d11996902e6ea70777a87a723d4f2dfa38a65
 Changed files: claim-on-demand poller, active lease heartbeat와 expired recovery/shutdown release, lease options/export, fresh/upgrade SQL, unit/PostgreSQL tests, README/CHANGELOG, ADR 0002, maintenance plan
 Contract / semver decision: lease.duration은 명시값이 deprecated stuckThreshold alias보다 우선한다. heartbeatInterval은 duration/2 미만이며 기본 duration/3, heartbeatFailureTolerance 기본 1이다. recovery는 retry budget을 소비하지 않는다. live heartbeat가 유지되는 영구 callback hang은 자동 회수하지 않고 application timeout/process termination이 필요하다. 0.2.x poller는 heartbeat를 쓰지 않으므로 lease-aware runtime 시작 전에 drain해야 한다. additive public option/schema migration이므로 기존 OUT-M01과 같은 next pre-1.0 minor 대상으로 결정했다.
 Commands and exact results: 첫 PostgreSQL RED max concurrent callback 2로 FAIL; npm ci 649 packages; unit 9 suites/110 tests PASS; PostgreSQL E2E 16 PASS; final packed 첫 시도는 정리된 DB 때문에 connection FAIL, 격리 DB 재시작 뒤 Nest 11.2.1/Prisma 7.10.0 PostgreSQL smoke PASS (sha512-9hWoNp4lFr5t4NBgoSkkRp4Mp2aVrXOkXScMiAHnT7ObOawOuKh5mH4iA6OD4UMZKLuGbXEx1LXmbIS7wKRnfw==); coverage statements 95.33%, branches 84.81%, functions 99.05%, lines 96.06%; lint/typecheck/build PASS; production audit 0; full audit 10 dev-only (high 7, moderate 1, low 2); git diff --check PASS
 Unverified paths and reason: 없음. OUT-M02 범위의 profile B/C/E와 packed consumer를 실행했다.
-External PR, run, release evidence: 없음. branch-local working tree이며 commit/push/PR/release는 수행하지 않았다.
+External PR, run, release evidence: local commit a14d119와 local main merge 95b4849. push/PR/release는 수행하지 않았다.
 Remaining risk: heartbeat loss 뒤 이미 시작된 외부 side effect는 취소할 수 없어 at-least-once/idempotency가 필요하다. live heartbeat가 유지되는 영구 hang은 운영 timeout/termination이 필요하다. 실제 crash-window release gate는 OUT-M04B 범위다.
-Next exact action: diff를 review한 뒤 OUT-M02 파일만 commit/push/merge하고, 다음 최저 미완료 P0인 OUT-M04A를 진행한다.
+Next exact action: 완료. local main merge 95b4849에서 다음 최저 미완료 P0인 OUT-M04A를 진행한다.
 ```
