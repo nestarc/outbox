@@ -11,6 +11,14 @@ export {
 export { OutboxEmitter } from './outbox.emitter';
 export { OutboxListener } from './outbox.listener';
 export {
+  OUTBOX_INVALID_CONFIGURATION,
+  OutboxConfigurationError,
+} from './errors/outbox-configuration.error';
+export {
+  OUTBOX_PERSISTED_INVARIANT_VIOLATION,
+  OutboxPersistedInvariantError,
+} from './errors/outbox-persisted-invariant.error';
+export {
   OUTBOX_WAKEUP_UNAVAILABLE,
   OutboxWakeupUnavailableError,
 } from './errors/outbox-wakeup-unavailable.error';

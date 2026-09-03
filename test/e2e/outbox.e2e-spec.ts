@@ -121,6 +121,18 @@ const NEXT_ATTEMPT_UPGRADE_STATEMENTS = NEXT_ATTEMPT_UPGRADE_SQL_FILE.replace(
   .map((s) => s.trim())
   .filter((s) => s.length > 0);
 
+const INVARIANT_UPGRADE_SQL_FILE = fs.readFileSync(
+  path.join(__dirname, '../../src/sql/upgrade-add-invariants.sql'),
+  'utf-8',
+);
+const INVARIANT_UPGRADE_STATEMENTS = INVARIANT_UPGRADE_SQL_FILE.replace(
+  /^\s*--.*$/gm,
+  '',
+)
+  .split(';')
+  .map((s) => s.trim())
+  .filter((s) => s.length > 0);
+
 async function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -304,6 +316,64 @@ describe('Outbox E2E', () => {
     expect(column.dataType).toBe('timestamp with time zone');
     expect(column.nextAttemptAt).toEqual(expect.any(Date));
     expect(index.indexDefinition).toContain('next_attempt_at');
+  });
+
+  it('enforces persisted row invariants on fresh and upgraded schemas', async () => {
+    for (const statement of INVARIANT_UPGRADE_STATEMENTS) {
+      await prisma.$executeRawUnsafe(statement);
+      await prisma.$executeRawUnsafe(statement);
+    }
+
+    const constraints = await prisma.$queryRaw<Array<{ name: string }>>`
+      SELECT conname::text AS name
+      FROM pg_constraint
+      WHERE conrelid = 'outbox_events'::regclass
+    `;
+    expect(
+      constraints.map((constraint: { name: string }) => constraint.name),
+    ).toEqual(
+      expect.arrayContaining([
+        'chk_retry_count_nonnegative',
+        'chk_max_retries_positive',
+        'chk_payload_object',
+        'chk_headers_object',
+        'chk_nonprocessing_claim_clear',
+      ]),
+    );
+
+    await expect(
+      prisma.$executeRawUnsafe(
+        `INSERT INTO outbox_events (event_type, payload, retry_count)
+         VALUES ('invalid.retry', '{}'::jsonb, -1)`,
+      ),
+    ).rejects.toThrow();
+    await expect(
+      prisma.$executeRawUnsafe(
+        `INSERT INTO outbox_events (event_type, payload, max_retries)
+         VALUES ('invalid.max-retries', '{}'::jsonb, 0)`,
+      ),
+    ).rejects.toThrow();
+    await expect(
+      prisma.$executeRawUnsafe(
+        `INSERT INTO outbox_events (event_type, payload)
+         VALUES ('invalid.payload', '[]'::jsonb)`,
+      ),
+    ).rejects.toThrow();
+    await expect(
+      prisma.$executeRawUnsafe(
+        `INSERT INTO outbox_events (event_type, payload, headers)
+         VALUES ('invalid.headers', '{}'::jsonb, '[]'::jsonb)`,
+      ),
+    ).rejects.toThrow();
+    await expect(
+      prisma.$executeRawUnsafe(
+        `INSERT INTO outbox_events (
+           event_type, payload, status, claim_token, lease_expires_at
+         ) VALUES (
+           'invalid.claim-state', '{}'::jsonb, 'PENDING', gen_random_uuid(), NOW()
+         )`,
+      ),
+    ).rejects.toThrow();
   });
 
   it('keeps a blocking publisher exclusively leased across two pollers', async () => {
@@ -655,6 +725,7 @@ describe('Outbox E2E', () => {
         channel: 'outbox_p0_gate',
         clientFactory: () => notificationClient,
       },
+      delivery: { mode: 'publisher' as const },
     };
     const poller = new OutboxPoller(
       options,
@@ -802,7 +873,7 @@ describe('Outbox E2E', () => {
         publish: jest.fn(async (record: OutboxRecord) => {
           await prisma.$executeRawUnsafe(
             `UPDATE outbox_events
-             SET status = $1, claim_token = NULL
+             SET status = $1, claim_token = NULL, lease_expires_at = NULL
              WHERE id = $2::uuid`,
             status,
             record.id,

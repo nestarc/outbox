@@ -9,6 +9,7 @@ import type {
   OutboxTenantListOptions,
 } from './interfaces/outbox-admin.interface';
 import type { OutboxOptions } from './interfaces/outbox-options.interface';
+import { parsePersistedOutboxRecord } from './outbox-invariants';
 import type { OutboxRecord } from './interfaces/outbox-record.interface';
 
 const DEFAULT_ADMIN_LIMIT = 50;
@@ -402,38 +403,7 @@ abstract class OutboxAdminBase<TListOptions extends OutboxListOptions> {
   }
 
   private mapRecord(row: Record<string, unknown>): OutboxRecord {
-    return {
-      id: String(row.id),
-      eventType: String(row.event_type ?? row.eventType),
-      payload: this.toObject(row.payload),
-      status: row.status as OutboxRecord['status'],
-      createdAt: this.toDate(row.created_at ?? row.createdAt),
-      updatedAt: this.toDate(row.updated_at ?? row.updatedAt),
-      processedAt: this.toNullableDate(row.processed_at ?? row.processedAt),
-      nextAttemptAt: this.toNullableDate(
-        row.next_attempt_at ?? row.nextAttemptAt,
-      ),
-      retryCount: this.toNumber(row.retry_count ?? row.retryCount),
-      maxRetries: this.toNumber(row.max_retries ?? row.maxRetries),
-      lastError: this.toNullableString(row.last_error ?? row.lastError),
-      tenantId: this.toNullableString(row.tenant_id ?? row.tenantId),
-      aggregateType: this.toNullableString(
-        row.aggregate_type ?? row.aggregateType,
-      ),
-      aggregateId: this.toNullableString(row.aggregate_id ?? row.aggregateId),
-      partitionKey: this.toNullableString(
-        row.partition_key ?? row.partitionKey,
-      ),
-      idempotencyKey: this.toNullableString(
-        row.idempotency_key ?? row.idempotencyKey,
-      ),
-      correlationId: this.toNullableString(
-        row.correlation_id ?? row.correlationId,
-      ),
-      causationId: this.toNullableString(row.causation_id ?? row.causationId),
-      headers: this.toHeaders(row.headers),
-      occurredAt: this.toDate(row.occurred_at ?? row.occurredAt),
-    };
+    return parsePersistedOutboxRecord(row);
   }
 
   private mapMutationResult(row: {
@@ -460,39 +430,6 @@ abstract class OutboxAdminBase<TListOptions extends OutboxListOptions> {
   private normalizeLimit(limit: number | undefined): number {
     if (limit === undefined) return DEFAULT_ADMIN_LIMIT;
     return Math.min(Math.max(Math.trunc(limit), 1), MAX_ADMIN_LIMIT);
-  }
-
-  private toObject(value: unknown): Record<string, unknown> {
-    if (typeof value === 'string') {
-      return JSON.parse(value) as Record<string, unknown>;
-    }
-
-    if (value && typeof value === 'object') {
-      return value as Record<string, unknown>;
-    }
-
-    return {};
-  }
-
-  private toHeaders(value: unknown): Record<string, string> {
-    const object = this.toObject(value);
-    return Object.fromEntries(
-      Object.entries(object).map(([key, val]) => [key, String(val)]),
-    );
-  }
-
-  private toDate(value: unknown): Date {
-    return value instanceof Date ? value : new Date(String(value));
-  }
-
-  private toNullableDate(value: unknown): Date | null {
-    if (value === null || value === undefined) return null;
-    return this.toDate(value);
-  }
-
-  private toNullableString(value: unknown): string | null {
-    if (value === null || value === undefined) return null;
-    return String(value);
   }
 
   private toNullableNumber(value: unknown): number | null {

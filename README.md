@@ -165,7 +165,14 @@ times.
 psql "$DATABASE_URL" -f "$(node -e "console.log(require.resolve('@nestarc/outbox/src/sql/upgrade-add-claim-token.sql'))")"
 psql "$DATABASE_URL" -f "$(node -e "console.log(require.resolve('@nestarc/outbox/src/sql/upgrade-add-lease.sql'))")"
 psql "$DATABASE_URL" -f "$(node -e "console.log(require.resolve('@nestarc/outbox/src/sql/upgrade-add-next-attempt-at.sql'))")"
+psql "$DATABASE_URL" -f "$(node -e "console.log(require.resolve('@nestarc/outbox/src/sql/upgrade-add-invariants.sql'))")"
 ```
+
+The invariant upgrade validates existing rows and fails if it finds a negative
+retry count, a non-positive retry limit, a non-object payload/headers value, or
+claim metadata attached to a non-`PROCESSING` row. Repair or quarantine those
+rows explicitly before retrying the migration; the runtime will not dispatch
+them silently.
 
 <details>
 <summary>View the full SQL</summary>
@@ -195,7 +202,15 @@ CREATE TABLE IF NOT EXISTS outbox_events (
   claim_token   UUID,
   lease_expires_at TIMESTAMPTZ,
 
-  CONSTRAINT chk_status CHECK (status IN ('PENDING', 'PROCESSING', 'SENT', 'FAILED'))
+  CONSTRAINT chk_status CHECK (status IN ('PENDING', 'PROCESSING', 'SENT', 'FAILED')),
+  CONSTRAINT chk_retry_count_nonnegative CHECK (retry_count >= 0),
+  CONSTRAINT chk_max_retries_positive CHECK (max_retries > 0),
+  CONSTRAINT chk_payload_object CHECK (jsonb_typeof(payload) = 'object'),
+  CONSTRAINT chk_headers_object CHECK (jsonb_typeof(headers) = 'object'),
+  CONSTRAINT chk_nonprocessing_claim_clear CHECK (
+    status = 'PROCESSING'
+    OR (claim_token IS NULL AND lease_expires_at IS NULL)
+  )
 );
 
 -- PENDING events: due-time eligibility with deterministic creation-time tie-break
@@ -240,26 +255,35 @@ All options passed to `OutboxModule.forRoot()` or the factory returned by `Outbo
 | --------------------------------- | --------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `prisma`                          | class ref / instance                    | **required**                 | `PrismaService` class reference (`forRoot`, must be `@Global`) or instance (`forRootAsync`). See `PrismaLike` type for minimum interface.              |
 | `polling.enabled`                 | `boolean`                               | `true`                       | Enable or disable the polling scheduler                                                                                                                |
-| `polling.interval`                | `number`                                | `5000`                       | Milliseconds between polling cycles                                                                                                                    |
-| `polling.batchSize`               | `number`                                | `100`                        | Maximum events processed per polling cycle                                                                                                             |
-| `retry.maxRetries`                | `number`                                | `5`                          | Maximum delivery attempts before marking an event `FAILED`                                                                                             |
+| `polling.interval`                | `number`                                | `5000`                       | Milliseconds between polling cycles; safe integer from 1 through `2147483647`                                                                          |
+| `polling.batchSize`               | `number`                                | `100`                        | Maximum events processed per polling cycle; safe integer from 1 through `10000`                                                                        |
+| `retry.maxRetries`                | `number`                                | `5`                          | Maximum delivery attempts before marking an event `FAILED`; positive PostgreSQL `INT` range                                                            |
 | `retry.backoff`                   | `'fixed' \| 'exponential'`              | `'exponential'`              | Backoff strategy between retries                                                                                                                       |
-| `retry.initialDelay`              | `number`                                | `1000`                       | Initial delay in ms (base for exponential, constant for fixed)                                                                                         |
+| `retry.initialDelay`              | `number`                                | `1000`                       | Initial delay in ms (base for exponential, constant for fixed); non-negative safe integer no greater than `retry.maxDelay`                             |
 | `retry.maxDelay`                  | `number`                                | `86400000`                   | Maximum persisted retry delay in ms. Must be no greater than `2147483647`; exponential delays saturate at this value.                                  |
 | `delivery.mode`                   | `'local' \| 'publisher'`                | `'local'`                    | `local` requires registered `@OnOutboxEvent()` handlers; `publisher` sends records to a broker-style transport without requiring local handlers.       |
-| `transport`                       | `Type`                                  | `LocalTransport`             | Custom transport class implementing `OutboxTransport` or `OutboxPublisher`.                                                                            |
+| `transport`                       | `Type`                                  | `LocalTransport`             | Custom transport class implementing `OutboxTransport` or `OutboxPublisher`; publisher mode requires a non-default publisher/legacy transport.          |
 | `tenancy.provider`                | `OutboxTenantProvider` / `Type`         | none                         | Optional trusted tenant provider. `LocalTransport` restores context with `provider.runWithTenant()` when available.                                    |
 | `tenancy.policy`                  | `optional \| required \| require-match` | `optional`                   | Producer provenance policy. `required` rejects a missing tenant; `require-match` also compares an explicit tenant with the provider exactly.           |
 | `hooks`                           | `OutboxHooks`                           | none                         | Optional lifecycle callbacks for emit, poll, dispatch success/failure, retry, and dead-letter metrics/tracing. Hook failures are logged and swallowed. |
 | `wakeup.enabled`                  | `boolean`                               | `false`                      | Enable PostgreSQL `LISTEN/NOTIFY` wakeup in addition to polling. Requires `pg` or a custom `clientFactory`.                                            |
 | `wakeup.channel`                  | `string`                                | `'outbox_events'`            | PostgreSQL notification channel.                                                                                                                       |
 | `wakeup.connectionString`         | `string`                                | `pg` default                 | Connection string used by the notification client when `pg` is installed.                                                                              |
-| `wakeup.reconnectDelay`           | `number`                                | `5000`                       | Base reconnect delay in ms. Consecutive failures back off exponentially up to 60 seconds and reset after a successful `LISTEN`.                        |
-| `lease.duration`                  | `number`                                | `stuckThreshold` or `300000` | Claim lifetime in ms. Active callbacks renew the lease; expired claims are eligible for recovery.                                                      |
+| `wakeup.reconnectDelay`           | `number`                                | `5000`                       | Positive safe-integer base reconnect delay in ms. Consecutive failures back off exponentially up to 60 seconds and reset after a successful `LISTEN`.  |
+| `lease.duration`                  | `number`                                | `stuckThreshold` or `300000` | Positive safe-integer claim lifetime in ms. Active callbacks renew the lease; expired claims are eligible for recovery.                                |
 | `lease.heartbeatInterval`         | `number`                                | `lease.duration / 3`         | Heartbeat interval in ms. Must be positive and less than half of `lease.duration`.                                                                     |
-| `lease.heartbeatFailureTolerance` | `number`                                | `1`                          | Consecutive heartbeat errors tolerated before the claimant abandons completion and lets the lease expire.                                              |
+| `lease.heartbeatFailureTolerance` | `number`                                | `1`                          | Non-negative integer count of heartbeat errors tolerated before the claimant abandons completion and lets the lease expire.                            |
 | `isGlobal`                        | `boolean`                               | `true`                       | Register the module globally so `OutboxEmitter` is available everywhere                                                                                |
-| `stuckThreshold`                  | `number`                                | `300000`                     | Deprecated compatibility alias for `lease.duration`; ignored when `lease.duration` is set.                                                             |
+| `stuckThreshold`                  | `number`                                | `300000`                     | Deprecated positive safe-integer compatibility alias for `lease.duration`; ignored when `lease.duration` is set.                                       |
+
+Both synchronous and async registration paths validate these values before the
+module can start. Invalid configuration throws `OutboxConfigurationError` with
+code `OUTBOX_INVALID_CONFIGURATION`. Polling disabled without an available
+wakeup path fails module initialization with `OutboxWakeupUnavailableError`.
+Rows read by the poller and admin APIs are also checked before exposure or
+delivery; corrupt status, retry, date, payload, or headers values throw
+`OutboxPersistedInvariantError` with code
+`OUTBOX_PERSISTED_INVARIANT_VIOLATION`.
 
 ### Async registration
 

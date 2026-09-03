@@ -22,7 +22,15 @@ CREATE TABLE IF NOT EXISTS outbox_events (
   claim_token   UUID,
   lease_expires_at TIMESTAMPTZ,
 
-  CONSTRAINT chk_status CHECK (status IN ('PENDING', 'PROCESSING', 'SENT', 'FAILED'))
+  CONSTRAINT chk_status CHECK (status IN ('PENDING', 'PROCESSING', 'SENT', 'FAILED')),
+  CONSTRAINT chk_retry_count_nonnegative CHECK (retry_count >= 0),
+  CONSTRAINT chk_max_retries_positive CHECK (max_retries > 0),
+  CONSTRAINT chk_payload_object CHECK (jsonb_typeof(payload) = 'object'),
+  CONSTRAINT chk_headers_object CHECK (jsonb_typeof(headers) = 'object'),
+  CONSTRAINT chk_nonprocessing_claim_clear CHECK (
+    status = 'PROCESSING'
+    OR (claim_token IS NULL AND lease_expires_at IS NULL)
+  )
 );
 
 -- PENDING events: due-time eligibility with deterministic creation-time tie-break
