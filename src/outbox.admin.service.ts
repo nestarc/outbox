@@ -20,6 +20,7 @@ const RECORD_SELECT = `
   created_at,
   updated_at,
   processed_at,
+  next_attempt_at,
   retry_count,
   max_retries,
   last_error,
@@ -36,7 +37,9 @@ const RECORD_SELECT = `
 
 @Injectable()
 export class OutboxAdminService {
-  constructor(@Inject(OUTBOX_OPTIONS) private readonly options: OutboxOptions) {}
+  constructor(
+    @Inject(OUTBOX_OPTIONS) private readonly options: OutboxOptions,
+  ) {}
 
   async getStats(): Promise<OutboxStats> {
     const rows = await this.options.prisma.$queryRaw<
@@ -141,6 +144,8 @@ export class OutboxAdminService {
         UPDATE outbox_events
         SET status = 'PENDING',
             last_error = NULL,
+            processed_at = NULL,
+            next_attempt_at = NOW(),
             updated_at = NOW()
         WHERE id = $1::uuid
           AND status = $2
@@ -165,6 +170,8 @@ export class OutboxAdminService {
         UPDATE outbox_events
         SET status = 'PENDING',
             last_error = NULL,
+            processed_at = NULL,
+            next_attempt_at = NOW(),
             updated_at = NOW()
         WHERE id IN (${placeholders})
           AND status = $${statusIndex}
@@ -180,6 +187,7 @@ export class OutboxAdminService {
         UPDATE outbox_events
         SET status = 'FAILED',
             last_error = $2,
+            next_attempt_at = NULL,
             updated_at = NOW()
         WHERE id = $1::uuid
       `,
@@ -279,6 +287,9 @@ export class OutboxAdminService {
       createdAt: this.toDate(row.created_at ?? row.createdAt),
       updatedAt: this.toDate(row.updated_at ?? row.updatedAt),
       processedAt: this.toNullableDate(row.processed_at ?? row.processedAt),
+      nextAttemptAt: this.toNullableDate(
+        row.next_attempt_at ?? row.nextAttemptAt,
+      ),
       retryCount: this.toNumber(row.retry_count ?? row.retryCount),
       maxRetries: this.toNumber(row.max_retries ?? row.maxRetries),
       lastError: this.toNullableString(row.last_error ?? row.lastError),
@@ -287,7 +298,9 @@ export class OutboxAdminService {
         row.aggregate_type ?? row.aggregateType,
       ),
       aggregateId: this.toNullableString(row.aggregate_id ?? row.aggregateId),
-      partitionKey: this.toNullableString(row.partition_key ?? row.partitionKey),
+      partitionKey: this.toNullableString(
+        row.partition_key ?? row.partitionKey,
+      ),
       idempotencyKey: this.toNullableString(
         row.idempotency_key ?? row.idempotencyKey,
       ),

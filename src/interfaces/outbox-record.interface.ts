@@ -6,6 +6,7 @@ export interface OutboxRecord {
   readonly createdAt: Date;
   readonly updatedAt: Date;
   readonly processedAt: Date | null;
+  readonly nextAttemptAt: Date | null;
   readonly retryCount: number;
   readonly maxRetries: number;
   readonly lastError: string | null;

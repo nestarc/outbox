@@ -13,6 +13,7 @@ function createRecord(overrides?: Partial<OutboxRecord>): OutboxRecord {
     createdAt: new Date(),
     updatedAt: new Date(),
     processedAt: null,
+    nextAttemptAt: null,
     retryCount: 0,
     maxRetries: 5,
     lastError: null,

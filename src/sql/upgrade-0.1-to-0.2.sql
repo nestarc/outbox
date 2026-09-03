@@ -10,6 +10,21 @@ ALTER TABLE outbox_events
   ADD COLUMN IF NOT EXISTS claim_token UUID,
   ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;
 
+ALTER TABLE outbox_events
+  ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMPTZ;
+
+UPDATE outbox_events
+SET next_attempt_at = NOW()
+WHERE status IN ('PENDING', 'PROCESSING')
+  AND retry_count > 0
+  AND next_attempt_at IS NULL;
+
+DROP INDEX IF EXISTS idx_outbox_pending;
+
+CREATE INDEX IF NOT EXISTS idx_outbox_pending
+  ON outbox_events (next_attempt_at ASC NULLS FIRST, created_at ASC)
+  WHERE status = 'PENDING';
+
 CREATE INDEX IF NOT EXISTS idx_outbox_aggregate
   ON outbox_events (aggregate_type, aggregate_id, created_at ASC)
   WHERE aggregate_id IS NOT NULL;

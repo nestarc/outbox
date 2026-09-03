@@ -18,6 +18,7 @@ function createRecord(
     createdAt: new Date(),
     updatedAt: new Date(),
     processedAt: null,
+    nextAttemptAt: null,
     retryCount: 0,
     maxRetries: 5,
     lastError: null,
@@ -691,6 +692,93 @@ describe('OutboxPoller', () => {
       expect(values).toContain('handler failed');
     });
 
+    it('persists retry due time once and claims only from the stored database time', async () => {
+      const record = createRecord({ retryCount: 0, maxRetries: 5 });
+      const firstPrisma = createMockPrisma([record]);
+      const failingTransport = createMockTransport();
+      failingTransport.dispatch.mockRejectedValue(new Error('retry later'));
+      const handler = {
+        instance: {},
+        methodName: 'handle',
+        eventTypes: ['order.created'],
+      };
+      const explorer = createMockExplorer({ 'order.created': [handler] });
+      const firstPoller = createPoller({
+        prisma: firstPrisma,
+        transport: failingTransport,
+        explorer,
+        options: {
+          retry: {
+            maxRetries: 5,
+            backoff: 'exponential',
+            initialDelay: 1_000,
+          },
+        },
+      });
+
+      await firstPoller.poll();
+
+      const [failureStrings, ...failureValues] =
+        firstPrisma.$executeRaw.mock.calls[0];
+      const failureSql = failureStrings.join('');
+      expect(failureSql).toContain(
+        'next_attempt_at = NOW() + make_interval(secs =>',
+      );
+      expect(failureValues).toContain(1);
+
+      const secondPrisma = createMockPrisma();
+      const secondPoller = createPoller({
+        prisma: secondPrisma,
+        options: {
+          retry: { maxRetries: 5, backoff: 'fixed', initialDelay: 60_000 },
+        },
+      });
+
+      await secondPoller.poll();
+
+      const [claimStrings, ...claimValues] =
+        secondPrisma.$queryRaw.mock.calls[0];
+      const claimSql = claimStrings.join('');
+      expect(claimSql).toContain('next_attempt_at <= NOW()');
+      expect(claimSql).not.toContain('pow(2, retry_count - 1)');
+      expect(claimValues).not.toContain('fixed');
+      expect(claimValues).not.toContain(60);
+    });
+
+    it('caps exponential retry delay before numeric overflow', async () => {
+      const record = createRecord({ retryCount: 1_000, maxRetries: 1_002 });
+      const prisma = createMockPrisma([record]);
+      const transport = createMockTransport();
+      transport.dispatch.mockRejectedValue(new Error('still unavailable'));
+      const explorer = createMockExplorer({
+        'order.created': [
+          {
+            instance: {},
+            methodName: 'handle',
+            eventTypes: ['order.created'],
+          },
+        ],
+      });
+      const poller = createPoller({
+        prisma,
+        transport,
+        explorer,
+        options: {
+          retry: {
+            maxRetries: 1_002,
+            backoff: 'exponential',
+            initialDelay: 1,
+            maxDelay: 5_000,
+          },
+        },
+      });
+
+      await poller.poll();
+
+      const [, ...values] = prisma.$executeRaw.mock.calls[0];
+      expect(values).toContain(5);
+    });
+
     it('should mark as FAILED with last_error when record.maxRetries exceeded', async () => {
       const record = createRecord({ retryCount: 2, maxRetries: 3 });
       const prisma = createMockPrisma([record]);
@@ -1108,6 +1196,32 @@ describe('OutboxPoller', () => {
     ])('rejects invalid $message', ({ lease, message }) => {
       expect(() =>
         createPoller({ options: { lease } as Partial<OutboxOptions> }),
+      ).toThrow(message);
+    });
+  });
+
+  describe('retry option invariants', () => {
+    it.each([
+      [
+        { initialDelay: -1 },
+        'retry.initialDelay must be a non-negative safe integer',
+      ],
+      [{ maxDelay: 0 }, 'retry.maxDelay must be a positive safe integer'],
+      [
+        { initialDelay: 2_000, maxDelay: 1_000 },
+        'retry.initialDelay must be less than or equal to retry.maxDelay',
+      ],
+    ])('rejects invalid retry options %j', (retry, message) => {
+      expect(() =>
+        createPoller({
+          options: {
+            retry: {
+              maxRetries: 5,
+              backoff: 'exponential',
+              ...retry,
+            },
+          },
+        }),
       ).toThrow(message);
     });
   });
