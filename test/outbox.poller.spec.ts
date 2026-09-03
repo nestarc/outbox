@@ -5,7 +5,11 @@ import type { OutboxRecord } from '../src/interfaces/outbox-record.interface';
 import type { OutboxExplorer } from '../src/outbox.explorer';
 import type { SchedulerRegistry } from '@nestjs/schedule';
 
-function createRecord(overrides?: Partial<OutboxRecord>): OutboxRecord {
+type ClaimedRecordFixture = OutboxRecord & { claimToken: string };
+
+function createRecord(
+  overrides?: Partial<ClaimedRecordFixture>,
+): ClaimedRecordFixture {
   return {
     id: 'evt-1',
     eventType: 'order.created',
@@ -26,8 +30,15 @@ function createRecord(overrides?: Partial<OutboxRecord>): OutboxRecord {
     causationId: null,
     headers: {},
     occurredAt: new Date(),
+    claimToken: 'claim-1',
     ...overrides,
   };
+}
+
+function publicRecord(record: ClaimedRecordFixture): OutboxRecord {
+  const snapshot: Partial<ClaimedRecordFixture> = { ...record };
+  delete snapshot.claimToken;
+  return snapshot as OutboxRecord;
 }
 
 function createMockPrisma(records: OutboxRecord[] = []) {
@@ -43,14 +54,18 @@ function createMockTransport(): jest.Mocked<OutboxTransport> {
 
 function createMockExplorer(
   handlerMap: Record<string, any[]> = {},
-): jest.Mocked<Pick<OutboxExplorer, 'getHandlers' | 'getRegisteredEventTypes'>> {
+): jest.Mocked<
+  Pick<OutboxExplorer, 'getHandlers' | 'getRegisteredEventTypes'>
+> {
   return {
     getHandlers: jest.fn((eventType: string) => handlerMap[eventType] ?? []),
     getRegisteredEventTypes: jest.fn(() => Object.keys(handlerMap)),
   };
 }
 
-function createMockSchedulerRegistry(): jest.Mocked<Pick<SchedulerRegistry, 'addInterval' | 'deleteInterval'>> {
+function createMockSchedulerRegistry(): jest.Mocked<
+  Pick<SchedulerRegistry, 'addInterval' | 'deleteInterval'>
+> {
   return {
     addInterval: jest.fn(),
     deleteInterval: jest.fn(),
@@ -121,11 +136,191 @@ describe('OutboxPoller', () => {
   });
 
   describe('poll', () => {
+    it('keeps the claimed identity when a hook mutates its record snapshot', async () => {
+      const record = createRecord({
+        payload: { order: { id: 'order-1' } },
+      });
+      const prisma = createMockPrisma([record]);
+      const transport = createMockTransport();
+      const handler = {
+        instance: {},
+        methodName: 'handle',
+        eventTypes: ['order.created'],
+      };
+      const explorer = createMockExplorer({ 'order.created': [handler] });
+      const hooks = {
+        onDispatchStart: jest.fn((context) => {
+          const mutableRecord = context.record as unknown as {
+            id: string;
+            payload: { order: { id: string } };
+          };
+          mutableRecord.id = 'evt-2';
+          mutableRecord.payload.order.id = 'order-2';
+        }),
+      };
+
+      const poller = createPoller({
+        prisma,
+        transport,
+        explorer,
+        options: { hooks },
+      });
+      await poller.poll();
+
+      expect(transport.dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'evt-1',
+          payload: { order: { id: 'order-1' } },
+        }),
+        [handler],
+        expect.objectContaining({ eventId: 'evt-1' }),
+      );
+      const [, ...transitionValues] = prisma.$executeRaw.mock.calls[0];
+      expect(transitionValues).toContain('evt-1');
+      expect(transitionValues).toContain('claim-1');
+      expect(transitionValues).not.toContain('evt-2');
+    });
+
+    it('keeps canonical retry state when a publisher mutates every public field', async () => {
+      const record = createRecord({
+        retryCount: 1,
+        maxRetries: 5,
+        tenantId: 'tenant-1',
+        payload: { order: { id: 'order-1' } },
+      });
+      const prisma = createMockPrisma([record]);
+      const publisher = {
+        publish: jest.fn(async (publishedRecord: OutboxRecord) => {
+          const mutable = publishedRecord as unknown as Record<string, unknown>;
+          mutable.id = 'evt-2';
+          mutable.status = 'SENT';
+          mutable.retryCount = 99;
+          mutable.maxRetries = 1;
+          mutable.tenantId = 'tenant-2';
+          (mutable.payload as { order: { id: string } }).order.id = 'order-2';
+          throw new Error('broker unavailable');
+        }),
+      };
+      const hooks = {
+        onDispatchFailure: jest.fn(),
+        onRetryScheduled: jest.fn(),
+      };
+      const poller = createPoller({
+        prisma,
+        transport: publisher,
+        options: { delivery: { mode: 'publisher' }, hooks },
+      });
+
+      await poller.poll();
+
+      const [strings, ...values] = prisma.$executeRaw.mock.calls[0];
+      expect(strings.join('')).toContain("SET status = 'PENDING'");
+      expect(values).toEqual(expect.arrayContaining([2, 'evt-1', 'claim-1']));
+      expect(values).not.toEqual(expect.arrayContaining(['evt-2', 99]));
+      expect(hooks.onRetryScheduled).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventId: 'evt-1',
+          tenantId: 'tenant-1',
+          retryCount: 2,
+          maxRetries: 5,
+          record: expect.objectContaining({
+            id: 'evt-1',
+            payload: { order: { id: 'order-1' } },
+          }),
+        }),
+      );
+    });
+
+    it.each([
+      {
+        name: 'success to SENT',
+        record: createRecord(),
+        transportError: undefined,
+        expectedHook: 'onDispatchSuccess',
+      },
+      {
+        name: 'retriable failure to PENDING',
+        record: createRecord({ retryCount: 1, maxRetries: 5 }),
+        transportError: new Error('retry'),
+        expectedHook: 'onRetryScheduled',
+      },
+      {
+        name: 'terminal failure to FAILED',
+        record: createRecord({ retryCount: 2, maxRetries: 3 }),
+        transportError: new Error('dead letter'),
+        expectedHook: 'onDeadLetter',
+      },
+    ])(
+      'treats a zero-row $name transition as a lost claim',
+      async ({ record, transportError, expectedHook }) => {
+        const prisma = createMockPrisma([record]);
+        prisma.$executeRaw.mockResolvedValue(0);
+        const transport = createMockTransport();
+        if (transportError) {
+          transport.dispatch.mockRejectedValue(transportError);
+        }
+        const handler = {
+          instance: {},
+          methodName: 'handle',
+          eventTypes: ['order.created'],
+        };
+        const explorer = createMockExplorer({ 'order.created': [handler] });
+        const hooks = {
+          onDispatchSuccess: jest.fn(),
+          onDispatchFailure: jest.fn(),
+          onRetryScheduled: jest.fn(),
+          onDeadLetter: jest.fn(),
+        };
+        const poller = createPoller({
+          prisma,
+          transport,
+          explorer,
+          options: { hooks },
+        });
+
+        await poller.poll();
+
+        const sql = prisma.$executeRaw.mock.calls[0][0].join('');
+        expect(sql).toContain("status = 'PROCESSING'");
+        expect(sql).toContain('claim_token =');
+        expect(
+          hooks[expectedHook as keyof typeof hooks],
+        ).not.toHaveBeenCalled();
+        if (transportError) {
+          expect(hooks.onDispatchFailure).not.toHaveBeenCalled();
+        }
+      },
+    );
+
+    it('claims rows with a private token that is not exposed to callbacks', async () => {
+      const record = createRecord();
+      const prisma = createMockPrisma([record]);
+      const publisher = { publish: jest.fn().mockResolvedValue(undefined) };
+      const poller = createPoller({
+        prisma,
+        transport: publisher,
+        options: { delivery: { mode: 'publisher' } },
+      });
+
+      await poller.poll();
+
+      const claimSql = prisma.$queryRaw.mock.calls[0][0].join('');
+      expect(claimSql).toContain('claim_token = gen_random_uuid()');
+      expect(claimSql).toContain('claim_token AS "claimToken"');
+      expect(publisher.publish).toHaveBeenCalledWith(
+        expect.not.objectContaining({ claimToken: expect.anything() }),
+      );
+    });
+
     it('should fetch events and dispatch to transport', async () => {
       const record = createRecord();
       const prisma = createMockPrisma([record]);
       const transport = createMockTransport();
-      const handler = { instance: {}, methodName: 'handle', eventTypes: ['order.created'] };
+      const handler = {
+        instance: {},
+        methodName: 'handle',
+        eventTypes: ['order.created'],
+      };
       const explorer = createMockExplorer({ 'order.created': [handler] });
 
       const poller = createPoller({ prisma, transport, explorer });
@@ -133,7 +328,7 @@ describe('OutboxPoller', () => {
 
       expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
       expect(transport.dispatch).toHaveBeenCalledWith(
-        record,
+        publicRecord(record),
         [handler],
         expect.objectContaining({
           eventId: record.id,
@@ -174,7 +369,7 @@ describe('OutboxPoller', () => {
       await poller.poll();
 
       expect(explorer.getHandlers).not.toHaveBeenCalled();
-      expect(publisher.publish).toHaveBeenCalledWith(record);
+      expect(publisher.publish).toHaveBeenCalledWith(publicRecord(record));
       const sql = prisma.$executeRaw.mock.calls[0][0].join('');
       expect(sql).toContain('SENT');
     });
@@ -196,7 +391,7 @@ describe('OutboxPoller', () => {
       await poller.poll();
 
       expect(explorer.getHandlers).not.toHaveBeenCalled();
-      expect(publisher.publish).toHaveBeenCalledWith(record);
+      expect(publisher.publish).toHaveBeenCalledWith(publicRecord(record));
       const [strings, ...values] = prisma.$executeRaw.mock.calls[0];
       expect(strings.join('')).toContain('PENDING');
       expect(values).toContain(2);
@@ -218,7 +413,7 @@ describe('OutboxPoller', () => {
       await poller.poll();
 
       expect(explorer.getHandlers).not.toHaveBeenCalled();
-      expect(transport.dispatch).toHaveBeenCalledWith(record, []);
+      expect(transport.dispatch).toHaveBeenCalledWith(publicRecord(record), []);
       const sql = prisma.$executeRaw.mock.calls[0][0].join('');
       expect(sql).toContain('SENT');
     });
@@ -228,7 +423,11 @@ describe('OutboxPoller', () => {
       const prisma = createMockPrisma([record]);
       const transport = createMockTransport();
       transport.dispatch.mockRejectedValue(new Error('handler failed'));
-      const handler = { instance: {}, methodName: 'handle', eventTypes: ['order.created'] };
+      const handler = {
+        instance: {},
+        methodName: 'handle',
+        eventTypes: ['order.created'],
+      };
       const explorer = createMockExplorer({ 'order.created': [handler] });
 
       const poller = createPoller({ prisma, transport, explorer });
@@ -251,7 +450,11 @@ describe('OutboxPoller', () => {
       const prisma = createMockPrisma([record]);
       const transport = createMockTransport();
       transport.dispatch.mockRejectedValue(new Error('still failing'));
-      const handler = { instance: {}, methodName: 'handle', eventTypes: ['order.created'] };
+      const handler = {
+        instance: {},
+        methodName: 'handle',
+        eventTypes: ['order.created'],
+      };
       const explorer = createMockExplorer({ 'order.created': [handler] });
 
       const poller = createPoller({ prisma, transport, explorer });
@@ -314,7 +517,11 @@ describe('OutboxPoller', () => {
       const prisma = createMockPrisma([record]);
       const transport = createMockTransport();
       transport.dispatch.mockRejectedValue(new Error('fail'));
-      const handler = { instance: {}, methodName: 'handle', eventTypes: ['order.created'] };
+      const handler = {
+        instance: {},
+        methodName: 'handle',
+        eventTypes: ['order.created'],
+      };
       const explorer = createMockExplorer({ 'order.created': [handler] });
 
       const poller = createPoller({
@@ -333,10 +540,17 @@ describe('OutboxPoller', () => {
     });
 
     it('should call dispatch lifecycle hooks around successful delivery', async () => {
-      const record = createRecord({ tenantId: 'tenant-1', correlationId: 'corr-1' });
+      const record = createRecord({
+        tenantId: 'tenant-1',
+        correlationId: 'corr-1',
+      });
       const prisma = createMockPrisma([record]);
       const transport = createMockTransport();
-      const handler = { instance: {}, methodName: 'handle', eventTypes: ['order.created'] };
+      const handler = {
+        instance: {},
+        methodName: 'handle',
+        eventTypes: ['order.created'],
+      };
       const explorer = createMockExplorer({ 'order.created': [handler] });
       const hooks = {
         onPollStart: jest.fn(),
@@ -356,11 +570,15 @@ describe('OutboxPoller', () => {
         expect.objectContaining({ batchSize: 10 }),
       );
       expect(hooks.onDispatchStart).toHaveBeenCalledWith(
-        expect.objectContaining({ record, tenantId: 'tenant-1', correlationId: 'corr-1' }),
+        expect.objectContaining({
+          record: publicRecord(record),
+          tenantId: 'tenant-1',
+          correlationId: 'corr-1',
+        }),
       );
       expect(hooks.onDispatchSuccess).toHaveBeenCalledWith(
         expect.objectContaining({
-          record,
+          record: publicRecord(record),
           tenantId: 'tenant-1',
           durationMs: expect.any(Number),
         }),
@@ -371,7 +589,11 @@ describe('OutboxPoller', () => {
       const record = createRecord();
       const prisma = createMockPrisma([record]);
       const transport = createMockTransport();
-      const handler = { instance: {}, methodName: 'handle', eventTypes: ['order.created'] };
+      const handler = {
+        instance: {},
+        methodName: 'handle',
+        eventTypes: ['order.created'],
+      };
       const explorer = createMockExplorer({ 'order.created': [handler] });
 
       const poller = createPoller({
@@ -380,7 +602,9 @@ describe('OutboxPoller', () => {
         explorer,
         options: {
           hooks: {
-            onDispatchStart: jest.fn().mockRejectedValue(new Error('hook failed')),
+            onDispatchStart: jest
+              .fn()
+              .mockRejectedValue(new Error('hook failed')),
           },
         },
       });
@@ -396,7 +620,11 @@ describe('OutboxPoller', () => {
       const prisma = createMockPrisma([record]);
       const transport = createMockTransport();
       transport.dispatch.mockRejectedValue(new Error('handler failed'));
-      const handler = { instance: {}, methodName: 'handle', eventTypes: ['order.created'] };
+      const handler = {
+        instance: {},
+        methodName: 'handle',
+        eventTypes: ['order.created'],
+      };
       const explorer = createMockExplorer({ 'order.created': [handler] });
       const hooks = {
         onDispatchFailure: jest.fn(),
@@ -413,10 +641,17 @@ describe('OutboxPoller', () => {
       await poller.poll();
 
       expect(hooks.onDispatchFailure).toHaveBeenCalledWith(
-        expect.objectContaining({ error: expect.any(Error), durationMs: expect.any(Number) }),
+        expect.objectContaining({
+          error: expect.any(Error),
+          durationMs: expect.any(Number),
+        }),
       );
       expect(hooks.onRetryScheduled).toHaveBeenCalledWith(
-        expect.objectContaining({ record, retryCount: 2, maxRetries: 5 }),
+        expect.objectContaining({
+          record: publicRecord(record),
+          retryCount: 2,
+          maxRetries: 5,
+        }),
       );
       expect(hooks.onDeadLetter).not.toHaveBeenCalled();
     });
@@ -426,7 +661,11 @@ describe('OutboxPoller', () => {
       const prisma = createMockPrisma([record]);
       const transport = createMockTransport();
       transport.dispatch.mockRejectedValue(new Error('still failing'));
-      const handler = { instance: {}, methodName: 'handle', eventTypes: ['order.created'] };
+      const handler = {
+        instance: {},
+        methodName: 'handle',
+        eventTypes: ['order.created'],
+      };
       const explorer = createMockExplorer({ 'order.created': [handler] });
       const hooks = {
         onDeadLetter: jest.fn(),
@@ -441,7 +680,11 @@ describe('OutboxPoller', () => {
       await poller.poll();
 
       expect(hooks.onDeadLetter).toHaveBeenCalledWith(
-        expect.objectContaining({ record, retryCount: 3, maxRetries: 3 }),
+        expect.objectContaining({
+          record: publicRecord(record),
+          retryCount: 3,
+          maxRetries: 3,
+        }),
       );
     });
   });
@@ -453,7 +696,9 @@ describe('OutboxPoller', () => {
 
       await poller.onApplicationShutdown();
 
-      expect(schedulerRegistry.deleteInterval).toHaveBeenCalledWith('outbox-poll');
+      expect(schedulerRegistry.deleteInterval).toHaveBeenCalledWith(
+        'outbox-poll',
+      );
     });
 
     it('should not throw if interval was not registered', async () => {
@@ -490,7 +735,9 @@ describe('OutboxPoller', () => {
 
       // Shutdown should NOT have resolved yet (poll is still running)
       let shutdownDone = false;
-      shutdownPromise.then(() => { shutdownDone = true; });
+      shutdownPromise.then(() => {
+        shutdownDone = true;
+      });
       await new Promise((resolve) => setTimeout(resolve, 200));
       expect(shutdownDone).toBe(false);
 

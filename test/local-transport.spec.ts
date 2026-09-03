@@ -71,6 +71,57 @@ describe('LocalTransport', () => {
     expect(callOrder).toEqual(['handler1', 'handler2']);
   });
 
+  it('gives each handler a detached deep record snapshot', async () => {
+    const observed: Array<{ id: string; nestedId: string }> = [];
+    const handler1: OutboxHandler = {
+      instance: {
+        handle: jest.fn(
+          async (
+            payload: Readonly<Record<string, unknown>>,
+            context: OutboxHandlerContext,
+          ) => {
+            const mutablePayload = payload as {
+              nested: { id: string };
+            };
+            const mutableRecord = context.record as unknown as { id: string };
+            mutablePayload.nested.id = 'mutated';
+            mutableRecord.id = 'mutated';
+          },
+        ),
+      },
+      methodName: 'handle',
+      eventTypes: ['order.created'],
+    };
+    const handler2: OutboxHandler = {
+      instance: {
+        handle: jest.fn(
+          async (
+            payload: Readonly<Record<string, unknown>>,
+            context: OutboxHandlerContext,
+          ) => {
+            observed.push({
+              id: context.record.id,
+              nestedId: (payload.nested as { id: string }).id,
+            });
+          },
+        ),
+      },
+      methodName: 'handle',
+      eventTypes: ['order.created'],
+    };
+    const record = createRecord({ payload: { nested: { id: 'original' } } });
+
+    await transport.dispatch(record, [handler1, handler2]);
+
+    expect(observed).toEqual([{ id: 'record-1', nestedId: 'original' }]);
+    expect(record).toEqual(
+      expect.objectContaining({
+        id: 'record-1',
+        payload: { nested: { id: 'original' } },
+      }),
+    );
+  });
+
   it('should pass metadata context as the second handler argument', async () => {
     const handler: OutboxHandler = {
       instance: {

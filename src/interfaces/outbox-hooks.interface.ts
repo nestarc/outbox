@@ -12,25 +12,25 @@ export interface OutboxPollContext {
 }
 
 export interface OutboxDispatchContext {
-  record: OutboxRecord;
-  eventId: string;
-  eventType: string;
-  tenantId: string | null;
-  retryCount: number;
-  maxRetries: number;
-  aggregateType: string | null;
-  aggregateId: string | null;
-  partitionKey: string | null;
-  idempotencyKey: string | null;
-  correlationId: string | null;
-  causationId: string | null;
-  headers: Record<string, string>;
+  readonly record: OutboxRecord;
+  readonly eventId: string;
+  readonly eventType: string;
+  readonly tenantId: string | null;
+  readonly retryCount: number;
+  readonly maxRetries: number;
+  readonly aggregateType: string | null;
+  readonly aggregateId: string | null;
+  readonly partitionKey: string | null;
+  readonly idempotencyKey: string | null;
+  readonly correlationId: string | null;
+  readonly causationId: string | null;
+  readonly headers: Readonly<Record<string, string>>;
 }
 
 export interface OutboxRetryContext extends OutboxDispatchContext {
-  error: Error;
-  retryCount: number;
-  maxRetries: number;
+  readonly error: Error;
+  readonly retryCount: number;
+  readonly maxRetries: number;
 }
 
 export interface OutboxHooks {
@@ -38,12 +38,12 @@ export interface OutboxHooks {
   onPollStart?(context: OutboxPollContext): void | Promise<void>;
   onDispatchStart?(context: OutboxDispatchContext): void | Promise<void>;
   onDispatchSuccess?(
-    context: OutboxDispatchContext & { durationMs: number },
+    context: OutboxDispatchContext & { readonly durationMs: number },
   ): void | Promise<void>;
   onDispatchFailure?(
     context: OutboxDispatchContext & {
-      error: Error;
-      durationMs: number;
+      readonly error: Error;
+      readonly durationMs: number;
     },
   ): void | Promise<void>;
   onRetryScheduled?(context: OutboxRetryContext): void | Promise<void>;
