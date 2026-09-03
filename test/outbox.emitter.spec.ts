@@ -1,5 +1,6 @@
 import { OutboxEmitter } from '../src/outbox.emitter';
 import { OutboxEvent } from '../src/outbox.event';
+import type { OutboxEmitOptions } from '../src/interfaces/outbox-emit-options.interface';
 import type { OutboxOptions } from '../src/interfaces/outbox-options.interface';
 
 class OrderCreatedEvent extends OutboxEvent {
@@ -50,7 +51,9 @@ describe('OutboxEmitter', () => {
       expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
       const [, ...values] = tx.$executeRaw.mock.calls[0];
       expect(values[0]).toBe('order.created');
-      expect(values[1]).toBe(JSON.stringify({ orderId: 'order-1', total: 99.99 }));
+      expect(values[1]).toBe(
+        JSON.stringify({ orderId: 'order-1', total: 99.99 }),
+      );
       expect(values[2]).toBe(5); // maxRetries
     });
 
@@ -132,7 +135,9 @@ describe('OutboxEmitter', () => {
     });
 
     it('should use tenancy provider tenant id when explicit tenant id is absent', async () => {
-      const tenantProvider = { getTenantId: jest.fn().mockReturnValue('tenant-from-provider') };
+      const tenantProvider = {
+        getTenantId: jest.fn().mockReturnValue('tenant-from-provider'),
+      };
       const emitter = createEmitter({ tenancy: { provider: tenantProvider } });
       const tx = createMockTx();
 
@@ -142,8 +147,25 @@ describe('OutboxEmitter', () => {
       expect(values[3]).toBe('tenant-from-provider');
     });
 
+    it('should use tenancy provider tenant id when explicit tenant id is undefined', async () => {
+      const tenantProvider = {
+        getTenantId: jest.fn().mockReturnValue('tenant-from-provider'),
+      };
+      const emitter = createEmitter({ tenancy: { provider: tenantProvider } });
+      const tx = createMockTx();
+
+      await emitter.emit(tx, new OrderCreatedEvent('order-1', 50), {
+        tenantId: undefined,
+      });
+
+      const [, ...values] = tx.$executeRaw.mock.calls[0];
+      expect(values[3]).toBe('tenant-from-provider');
+    });
+
     it('should prefer explicit tenant id over tenancy provider tenant id', async () => {
-      const tenantProvider = { getTenantId: jest.fn().mockReturnValue('tenant-from-provider') };
+      const tenantProvider = {
+        getTenantId: jest.fn().mockReturnValue('tenant-from-provider'),
+      };
       const emitter = createEmitter({ tenancy: { provider: tenantProvider } });
       const tx = createMockTx();
 
@@ -153,6 +175,144 @@ describe('OutboxEmitter', () => {
 
       const [, ...values] = tx.$executeRaw.mock.calls[0];
       expect(values[3]).toBe('tenant-explicit');
+      expect(tenantProvider.getTenantId).not.toHaveBeenCalled();
+    });
+
+    it('should store a deliberate global event without consulting the provider', async () => {
+      const tenantProvider = {
+        getTenantId: jest.fn().mockReturnValue('tenant-from-provider'),
+      };
+      const emitter = createEmitter({
+        tenancy: { provider: tenantProvider, policy: 'required' },
+      });
+      const tx = createMockTx();
+
+      await emitter.emit(tx, new OrderCreatedEvent('order-1', 50), {
+        tenantScope: 'global',
+      });
+
+      const [, ...values] = tx.$executeRaw.mock.calls[0];
+      expect(values[3]).toBeNull();
+      expect(tenantProvider.getTenantId).not.toHaveBeenCalled();
+    });
+
+    it('should reject null tenant id in favor of the explicit global scope', async () => {
+      const emitter = createEmitter();
+      const tx = createMockTx();
+      const options = { tenantId: null } as unknown as OutboxEmitOptions;
+
+      await expect(
+        emitter.emit(tx, new OrderCreatedEvent('order-1', 50), options),
+      ).rejects.toThrow(
+        'Outbox tenantId cannot be null; use tenantScope: "global" for a global event',
+      );
+      expect(tx.$executeRaw).not.toHaveBeenCalled();
+    });
+
+    it.each(['', '   ', ' tenant-1', 'tenant-1 '])(
+      'should reject non-canonical explicit tenant id %p before inserting',
+      async (tenantId) => {
+        const emitter = createEmitter();
+        const tx = createMockTx();
+
+        await expect(
+          emitter.emit(tx, new OrderCreatedEvent('order-1', 50), {
+            tenantId,
+          }),
+        ).rejects.toThrow(
+          'Outbox explicit tenantId must be non-empty and have no leading or trailing whitespace',
+        );
+        expect(tx.$executeRaw).not.toHaveBeenCalled();
+      },
+    );
+
+    it('should reject a non-string explicit tenant id before inserting', async () => {
+      const emitter = createEmitter();
+      const tx = createMockTx();
+      const options = { tenantId: 42 } as unknown as OutboxEmitOptions;
+
+      await expect(
+        emitter.emit(tx, new OrderCreatedEvent('order-1', 50), options),
+      ).rejects.toThrow('Outbox explicit tenantId must be a string');
+      expect(tx.$executeRaw).not.toHaveBeenCalled();
+    });
+
+    it('should reject an invalid provider tenant id before inserting', async () => {
+      const tenantProvider = {
+        getTenantId: jest.fn().mockReturnValue(' tenant-1'),
+      };
+      const emitter = createEmitter({ tenancy: { provider: tenantProvider } });
+      const tx = createMockTx();
+
+      await expect(
+        emitter.emit(tx, new OrderCreatedEvent('order-1', 50)),
+      ).rejects.toThrow(
+        'Outbox provider tenantId must be non-empty and have no leading or trailing whitespace',
+      );
+      expect(tx.$executeRaw).not.toHaveBeenCalled();
+    });
+
+    it('should require a tenant under the required policy', async () => {
+      const emitter = createEmitter({ tenancy: { policy: 'required' } });
+      const tx = createMockTx();
+
+      await expect(
+        emitter.emit(tx, new OrderCreatedEvent('order-1', 50)),
+      ).rejects.toThrow(
+        'Outbox tenancy policy "required" requires a tenantId or tenantScope: "global"',
+      );
+      expect(tx.$executeRaw).not.toHaveBeenCalled();
+    });
+
+    it('should accept matching explicit and provider tenant ids', async () => {
+      const tenantProvider = {
+        getTenantId: jest.fn().mockReturnValue('tenant-1'),
+      };
+      const emitter = createEmitter({
+        tenancy: { provider: tenantProvider, policy: 'require-match' },
+      });
+      const tx = createMockTx();
+
+      await emitter.emit(tx, new OrderCreatedEvent('order-1', 50), {
+        tenantId: 'tenant-1',
+      });
+
+      const [, ...values] = tx.$executeRaw.mock.calls[0];
+      expect(values[3]).toBe('tenant-1');
+      expect(tenantProvider.getTenantId).toHaveBeenCalledTimes(1);
+    });
+
+    it('should fail closed when explicit and provider tenant ids differ', async () => {
+      const tenantProvider = {
+        getTenantId: jest.fn().mockReturnValue('tenant-provider'),
+      };
+      const emitter = createEmitter({
+        tenancy: { provider: tenantProvider, policy: 'require-match' },
+      });
+      const tx = createMockTx();
+
+      await expect(
+        emitter.emit(tx, new OrderCreatedEvent('order-1', 50), {
+          tenantId: 'tenant-explicit',
+        }),
+      ).rejects.toThrow(
+        'Outbox explicit tenantId does not match the provider tenantId',
+      );
+      expect(tx.$executeRaw).not.toHaveBeenCalled();
+    });
+
+    it('should require provider provenance for an explicit require-match tenant', async () => {
+      const emitter = createEmitter({ tenancy: { policy: 'require-match' } });
+      const tx = createMockTx();
+
+      await expect(
+        emitter.emit(tx, new OrderCreatedEvent('order-1', 50), {
+          tenantId: 'tenant-1',
+        }),
+      ).rejects.toThrow(
+        'Outbox tenancy policy "require-match" requires a provider tenantId',
+      );
+      expect(tx.$executeRaw).not.toHaveBeenCalled();
     });
 
     it('should call onEmit hook and isolate hook errors', async () => {
@@ -244,6 +404,33 @@ describe('OutboxEmitter', () => {
       expect(values).toContain('order.created');
       expect(values).toContain('order.paid');
       expect(values).toContain('Order');
+    });
+
+    it('should reject the whole bulk insert when any tenant provenance is invalid', async () => {
+      const tenantProvider = {
+        getTenantId: jest.fn().mockReturnValue('tenant-1'),
+      };
+      const emitter = createEmitter({
+        tenancy: { provider: tenantProvider, policy: 'require-match' },
+      });
+      const tx = createMockTx();
+
+      await expect(
+        emitter.emitMany(tx, [
+          {
+            event: new OrderCreatedEvent('order-1', 100),
+            options: { tenantId: 'tenant-1' },
+          },
+          {
+            event: new OrderPaidEvent('order-1'),
+            options: { tenantId: 'tenant-2' },
+          },
+        ]),
+      ).rejects.toThrow(
+        'Outbox explicit tenantId does not match the provider tenantId',
+      );
+      expect(tx.$executeRawUnsafe).not.toHaveBeenCalled();
+      expect(tx.$executeRaw).not.toHaveBeenCalled();
     });
   });
 });

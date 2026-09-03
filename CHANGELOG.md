@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Tenant producer provenance is now controlled by
+  `tenancy.policy: 'optional' | 'required' | 'require-match'`. Undefined tenant
+  ids fall back to the configured provider; null, non-string, blank, and
+  non-canonical whitespace values fail before SQL. Global events use the
+  explicit `tenantScope: 'global'` escape hatch, and `require-match` rejects
+  explicit/provider mismatches.
 - Retry failures now persist a PostgreSQL-clock `next_attempt_at`; every
   poller claims from that stored due time instead of recalculating eligibility
   from its local backoff configuration. `retry.maxDelay` bounds exponential

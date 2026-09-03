@@ -49,6 +49,7 @@ export type {
 export type { OutboxHandlerContext } from './interfaces/outbox-handler-context.interface';
 export type { OutboxRecord } from './interfaces/outbox-record.interface';
 export type {
+  OutboxTenantPolicy,
   OutboxTenancyOptions,
   OutboxTenantProvider,
 } from './interfaces/outbox-tenancy.interface';

@@ -1,9 +1,17 @@
-import type { OutboxEmitOptions } from './outbox-emit-options.interface';
 import type { OutboxRecord } from './outbox-record.interface';
 
-export interface OutboxEmitContext extends Required<OutboxEmitOptions> {
+export interface OutboxEmitContext {
   eventType: string;
   payload: Record<string, unknown>;
+  tenantId: string | null;
+  aggregateType: string | null;
+  aggregateId: string | null;
+  partitionKey: string | null;
+  idempotencyKey: string | null;
+  correlationId: string | null;
+  causationId: string | null;
+  headers: Record<string, string>;
+  occurredAt: Date | null;
 }
 
 export interface OutboxPollContext {
