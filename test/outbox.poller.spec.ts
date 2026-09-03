@@ -1135,6 +1135,48 @@ describe('OutboxPoller', () => {
       expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
     });
 
+    it('keeps a publisher rejection retriable when shutdown starts during dispatch', async () => {
+      const record = createRecord({ retryCount: 0, maxRetries: 3 });
+      const prisma = createMockPrisma([record]);
+      let reportDispatchStarted!: () => void;
+      const dispatchStarted = new Promise<void>((resolve) => {
+        reportDispatchStarted = resolve;
+      });
+      let rejectDispatch!: (error: Error) => void;
+      const dispatchBarrier = new Promise<never>((_, reject) => {
+        rejectDispatch = reject;
+      });
+      const publisher = {
+        publish: jest.fn(async () => {
+          reportDispatchStarted();
+          return dispatchBarrier;
+        }),
+      };
+      const poller = createPoller({
+        prisma,
+        transport: publisher,
+        options: {
+          delivery: { mode: 'publisher' },
+          retry: { maxRetries: 3, backoff: 'fixed', initialDelay: 100 },
+        },
+      });
+
+      const polling = poller.poll();
+      await dispatchStarted;
+      const shutdown = poller.onApplicationShutdown();
+      rejectDispatch(new Error('publisher closed during shutdown'));
+      await Promise.all([polling, shutdown]);
+
+      expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+      const [sql, ...values] = prisma.$executeRaw.mock.calls[0];
+      expect(sql.join('')).toContain("SET status = 'PENDING'");
+      expect(sql.join('')).toContain('next_attempt_at = NOW()');
+      expect(sql.join('')).not.toContain("SET status = 'FAILED'");
+      expect(values).toEqual(
+        expect.arrayContaining([1, record.id, record.claimToken]),
+      );
+    });
+
     it('releases a claim fetched after shutdown starts without dispatching it', async () => {
       const record = createRecord();
       let releaseFetch!: () => void;

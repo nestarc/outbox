@@ -162,6 +162,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before `SENT` process loss, and notification/poll fallback coalescing. The
   existing CI and release PostgreSQL jobs run this suite for their supported
   runtime tuples.
+- PostgreSQL E2E now also covers publisher terminal `FAILED`, provider-derived
+  tenant persistence with ambient handler-context restoration, real
+  LISTEN-before/after readiness, real notification burst coalescing, polling
+  fallback after notification loss, reconnect generations, shutdown claim
+  release, mixed retry configurations, and runtime delivery after exact
+  v0.1.0/v0.2.1 fixture upgrades.
 
 ### Migration
 

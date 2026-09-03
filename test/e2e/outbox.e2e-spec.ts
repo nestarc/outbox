@@ -1,9 +1,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { createHash } from 'crypto';
+import { AsyncLocalStorage } from 'async_hooks';
 import { Test } from '@nestjs/testing';
 import { Injectable, type INestApplication } from '@nestjs/common';
 import { PrismaPg } from '@prisma/adapter-pg';
+import { Client } from 'pg';
 import { OutboxModule } from '../../src/outbox.module';
 import {
   OutboxAdminService,
@@ -17,7 +19,9 @@ import { OnOutboxEvent } from '../../src/outbox.decorator';
 import type { OutboxHandlerContext } from '../../src/interfaces/outbox-handler-context.interface';
 import type { OutboxNotificationClient } from '../../src/interfaces/outbox-wakeup.interface';
 import type { OutboxRecord } from '../../src/interfaces/outbox-record.interface';
+import type { OutboxTenantProvider } from '../../src/interfaces/outbox-tenancy.interface';
 import { OutboxSchemaGuard } from '../../src/outbox.schema';
+import { LocalTransport } from '../../src/transports/local.transport';
 
 // --- Test event ---
 class OrderCreatedEvent extends OutboxEvent {
@@ -159,11 +163,33 @@ async function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function withTimeout<T>(
+  promise: Promise<T>,
+  label: string,
+  timeoutMs = 5_000,
+): Promise<T> {
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error(`Timed out waiting for ${label}`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 describe('Outbox E2E', () => {
   let prisma: any;
+  let connectionString: string;
 
   beforeAll(async () => {
-    const connectionString =
+    connectionString =
       process.env.DATABASE_URL ??
       'postgresql://test:test@localhost:5433/outbox_test';
     const prismaVersion = JSON.parse(
@@ -264,6 +290,10 @@ describe('Outbox E2E', () => {
         `INSERT INTO outbox_events (event_type, payload, status, retry_count, last_error)
          VALUES ('legacy.retry', '{}'::jsonb, 'FAILED', 2, 'legacy detail')`,
       );
+      await prisma.$executeRawUnsafe(
+        `INSERT INTO outbox_events (event_type, payload)
+         VALUES ('legacy.runtime', '{"release":"${expectedRelease}"}'::jsonb)`,
+      );
 
       const legacyGuard = new OutboxSchemaGuard({ prisma });
       await expect(legacyGuard.onModuleInit()).rejects.toMatchObject({
@@ -311,6 +341,34 @@ describe('Outbox E2E', () => {
         leaseExpiresAt: null,
         nextAttemptAt: null,
       });
+
+      const publisher = { publish: jest.fn().mockResolvedValue(undefined) };
+      const upgradedPoller = new OutboxPoller(
+        {
+          prisma,
+          polling: { enabled: false, batchSize: 1 },
+          delivery: { mode: 'publisher' },
+        },
+        publisher,
+        { getHandlers: jest.fn() } as any,
+        { addInterval: jest.fn(), deleteInterval: jest.fn() } as any,
+      );
+      await upgradedPoller.poll();
+
+      const [processed] = await prisma.$queryRaw<
+        Array<{ status: string; claimToken: string | null }>
+      >`
+        SELECT status, claim_token::text AS "claimToken"
+        FROM outbox_events
+        WHERE event_type = 'legacy.runtime'
+      `;
+      expect(publisher.publish).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventType: 'legacy.runtime',
+          payload: { release: expectedRelease },
+        }),
+      );
+      expect(processed).toEqual({ status: 'SENT', claimToken: null });
     }
   });
 
@@ -773,6 +831,394 @@ describe('Outbox E2E', () => {
         processedAt: expect.any(Date),
       },
     ]);
+  });
+
+  it('persists a publisher terminal failure with its final retry state', async () => {
+    await prisma.$executeRaw`
+      INSERT INTO outbox_events (event_type, payload, max_retries)
+      VALUES ('publisher.final-failure', '{}'::jsonb, 1)
+    `;
+    const publisherError = new Error('broker rejected the final attempt');
+    const publisher = { publish: jest.fn().mockRejectedValue(publisherError) };
+    const poller = new OutboxPoller(
+      {
+        prisma,
+        polling: { enabled: false, batchSize: 1 },
+        delivery: { mode: 'publisher' },
+        retry: { maxRetries: 9, backoff: 'fixed', initialDelay: 0 },
+      },
+      publisher,
+      { getHandlers: jest.fn() } as any,
+      { addInterval: jest.fn(), deleteInterval: jest.fn() } as any,
+    );
+
+    await poller.poll();
+
+    const [terminal] = await prisma.$queryRaw<
+      Array<{
+        status: string;
+        retryCount: number;
+        maxRetries: number;
+        lastError: string;
+        processedAt: Date | null;
+        nextAttemptAt: Date | null;
+        claimToken: string | null;
+        leaseExpiresAt: Date | null;
+      }>
+    >`
+      SELECT
+        status,
+        retry_count AS "retryCount",
+        max_retries AS "maxRetries",
+        last_error AS "lastError",
+        processed_at AS "processedAt",
+        next_attempt_at AS "nextAttemptAt",
+        claim_token::text AS "claimToken",
+        lease_expires_at AS "leaseExpiresAt"
+      FROM outbox_events
+      WHERE event_type = 'publisher.final-failure'
+    `;
+    expect(publisher.publish).toHaveBeenCalledTimes(1);
+    expect(terminal).toEqual({
+      status: 'FAILED',
+      retryCount: 1,
+      maxRetries: 1,
+      lastError: publisherError.message,
+      processedAt: null,
+      nextAttemptAt: null,
+      claimToken: null,
+      leaseExpiresAt: null,
+    });
+  });
+
+  it('persists a provider tenant and restores it around local handler delivery', async () => {
+    const tenantStorage = new AsyncLocalStorage<string>();
+    const tenantProvider: OutboxTenantProvider = {
+      getTenantId: () => tenantStorage.getStore(),
+      runWithTenant: async <T>(tenantId: string, fn: () => Promise<T>) =>
+        tenantStorage.run(tenantId, fn),
+    };
+    const options = {
+      prisma,
+      polling: { enabled: false, batchSize: 1 },
+      tenancy: { policy: 'required' as const },
+    };
+    const emitter = new OutboxEmitter(options, tenantProvider);
+    const observedTenants: Array<string | undefined> = [];
+    const observedContexts: OutboxHandlerContext[] = [];
+    const handler = {
+      instance: {
+        handle: jest.fn(
+          async (
+            _payload: Record<string, unknown>,
+            context: OutboxHandlerContext,
+          ) => {
+            observedTenants.push(tenantStorage.getStore());
+            observedContexts.push(context);
+          },
+        ),
+      },
+      methodName: 'handle',
+      eventTypes: ['order.created'],
+    };
+
+    await tenantStorage.run('tenant-from-provider', async () => {
+      await prisma.$transaction(async (tx: any) => {
+        await emitter.emit(tx, new OrderCreatedEvent('tenant-order', 42));
+      });
+    });
+    expect(tenantStorage.getStore()).toBeUndefined();
+
+    const [pending] = await prisma.$queryRaw<
+      Array<{ id: string; tenantId: string; status: string }>
+    >`
+      SELECT id, tenant_id AS "tenantId", status
+      FROM outbox_events
+      WHERE event_type = 'order.created'
+    `;
+    expect(pending).toEqual({
+      id: expect.any(String),
+      tenantId: 'tenant-from-provider',
+      status: 'PENDING',
+    });
+
+    const poller = new OutboxPoller(
+      options,
+      new LocalTransport(tenantProvider),
+      { getHandlers: jest.fn().mockReturnValue([handler]) } as any,
+      { addInterval: jest.fn(), deleteInterval: jest.fn() } as any,
+    );
+    await poller.poll();
+
+    expect(observedTenants).toEqual(['tenant-from-provider']);
+    expect(observedContexts).toEqual([
+      expect.objectContaining({
+        eventId: pending.id,
+        tenantId: 'tenant-from-provider',
+      }),
+    ]);
+    expect(tenantStorage.getStore()).toBeUndefined();
+    const [sent] = await prisma.$queryRaw<Array<{ status: string }>>`
+      SELECT status FROM outbox_events WHERE id = ${pending.id}::uuid
+    `;
+    expect(sent).toEqual({ status: 'SENT' });
+  });
+
+  it('wakes only after the real PostgreSQL listener is ready', async () => {
+    const channel = 'outbox_m20_ready';
+    await prisma.$executeRaw`
+      INSERT INTO outbox_events (event_type, payload)
+      VALUES ('wakeup.listener-ready', '{}'::jsonb)
+    `;
+    const publisher = { publish: jest.fn().mockResolvedValue(undefined) };
+    let reportSuccess!: () => void;
+    const dispatchSucceeded = new Promise<void>((resolve) => {
+      reportSuccess = resolve;
+    });
+    const options = {
+      prisma,
+      polling: { enabled: false, batchSize: 1 },
+      delivery: { mode: 'publisher' as const },
+      hooks: { onDispatchSuccess: reportSuccess },
+      wakeup: { enabled: true, channel, connectionString },
+    };
+    const poller = new OutboxPoller(
+      options,
+      publisher,
+      { getHandlers: jest.fn() } as any,
+      { addInterval: jest.fn(), deleteInterval: jest.fn() } as any,
+    );
+    const listener = new OutboxListener(options, poller);
+
+    // PostgreSQL drops NOTIFY messages when no matching LISTEN session exists.
+    await prisma.$executeRaw`SELECT pg_notify(${channel}, 'before-listen')`;
+    await listener.onModuleInit();
+    expect(publisher.publish).not.toHaveBeenCalled();
+
+    await prisma.$executeRaw`SELECT pg_notify(${channel}, 'after-listen')`;
+    await withTimeout(dispatchSucceeded, 'post-LISTEN delivery');
+    await listener.onApplicationShutdown();
+
+    expect(publisher.publish).toHaveBeenCalledTimes(1);
+    const [terminal] = await prisma.$queryRaw<Array<{ status: string }>>`
+      SELECT status
+      FROM outbox_events
+      WHERE event_type = 'wakeup.listener-ready'
+    `;
+    expect(terminal).toEqual({ status: 'SENT' });
+  });
+
+  it('coalesces a real PostgreSQL notification burst into one queued rerun', async () => {
+    const channel = 'outbox_m20_burst';
+    let reportFirstQueryStarted!: () => void;
+    const firstQueryStarted = new Promise<void>((resolve) => {
+      reportFirstQueryStarted = resolve;
+    });
+    let releaseFirstQuery!: () => void;
+    const firstQueryBarrier = new Promise<void>((resolve) => {
+      releaseFirstQuery = resolve;
+    });
+    let queryCount = 0;
+    let activeQueries = 0;
+    let maxActiveQueries = 0;
+    const coordinatedPrisma = {
+      $queryRaw: async (...args: any[]) => {
+        queryCount++;
+        activeQueries++;
+        maxActiveQueries = Math.max(maxActiveQueries, activeQueries);
+        try {
+          if (queryCount === 1) {
+            reportFirstQueryStarted();
+            await firstQueryBarrier;
+          }
+          return await Reflect.apply(prisma.$queryRaw, prisma, args);
+        } finally {
+          activeQueries--;
+        }
+      },
+      $executeRaw: (...args: any[]) =>
+        Reflect.apply(prisma.$executeRaw, prisma, args),
+    };
+    const notificationClient = new Client({ connectionString });
+    let notificationsSeen = 0;
+    let reportBurstObserved!: () => void;
+    const burstObserved = new Promise<void>((resolve) => {
+      reportBurstObserved = resolve;
+    });
+    notificationClient.on('notification', () => {
+      notificationsSeen++;
+      if (notificationsSeen === 101) reportBurstObserved();
+    });
+    const notificationAdapter: OutboxNotificationClient = {
+      connect: async () => {
+        await notificationClient.connect();
+      },
+      query: (sql: string) => notificationClient.query(sql),
+      end: () => notificationClient.end(),
+      on(event: string, handler: (payload: any) => void) {
+        notificationClient.on(event as 'notification', handler);
+        return notificationAdapter;
+      },
+      off(event: string, handler: (payload: any) => void) {
+        notificationClient.off(event as 'notification', handler);
+        return notificationAdapter;
+      },
+    };
+    const options = {
+      prisma: coordinatedPrisma,
+      polling: { enabled: false, batchSize: 1 },
+      delivery: { mode: 'publisher' as const },
+      wakeup: {
+        enabled: true,
+        channel,
+        clientFactory: () => notificationAdapter,
+      },
+    };
+    const poller = new OutboxPoller(
+      options,
+      { publish: jest.fn().mockResolvedValue(undefined) },
+      { getHandlers: jest.fn() } as any,
+      { addInterval: jest.fn(), deleteInterval: jest.fn() } as any,
+    );
+    const listener = new OutboxListener(options, poller);
+    await listener.onModuleInit();
+
+    await prisma.$executeRaw`SELECT pg_notify(${channel}, 'initial')`;
+    await withTimeout(firstQueryStarted, 'first notification poll');
+    await prisma.$executeRawUnsafe(
+      `SELECT pg_notify('${channel}', value::text)
+       FROM generate_series(1, 100) AS value`,
+    );
+    await withTimeout(burstObserved, 'all burst notifications');
+    const completion = poller.poll();
+    releaseFirstQuery();
+    await withTimeout(completion, 'coalesced notification polls');
+    await listener.onApplicationShutdown();
+
+    expect(queryCount).toBe(2);
+    expect(maxActiveQueries).toBe(1);
+  });
+
+  it('uses polling fallback when PostgreSQL notification delivery is lost', async () => {
+    const channel = 'outbox_m20_fallback';
+    let registeredInterval: NodeJS.Timeout | undefined;
+    const schedulerRegistry = {
+      addInterval: jest.fn((_name: string, interval: NodeJS.Timeout) => {
+        registeredInterval = interval;
+      }),
+      deleteInterval: jest.fn(() => {
+        if (registeredInterval) clearInterval(registeredInterval);
+      }),
+    };
+    let reportSuccess!: () => void;
+    const dispatchSucceeded = new Promise<void>((resolve) => {
+      reportSuccess = resolve;
+    });
+    const publisher = { publish: jest.fn().mockResolvedValue(undefined) };
+    const options = {
+      prisma,
+      polling: { enabled: true, interval: 25, batchSize: 1 },
+      delivery: { mode: 'publisher' as const },
+      hooks: { onDispatchSuccess: reportSuccess },
+      wakeup: { enabled: true, channel, connectionString },
+    };
+    const poller = new OutboxPoller(
+      options,
+      publisher,
+      { getHandlers: jest.fn() } as any,
+      schedulerRegistry as any,
+    );
+    const listener = new OutboxListener(options, poller);
+    await listener.onModuleInit();
+    await poller.onModuleInit();
+
+    // Deliberately bypass OutboxEmitter so no pg_notify call is staged.
+    await prisma.$executeRaw`
+      INSERT INTO outbox_events (event_type, payload)
+      VALUES ('wakeup.notification-lost', '{}'::jsonb)
+    `;
+    await withTimeout(dispatchSucceeded, 'polling fallback delivery');
+    await listener.onApplicationShutdown();
+    await poller.onApplicationShutdown();
+
+    expect(publisher.publish).toHaveBeenCalledTimes(1);
+  });
+
+  it('delivers through the current real PostgreSQL reconnect generation', async () => {
+    const channel = 'outbox_m20_reconnect';
+    const clients: Array<{
+      client: Client;
+      adapter: OutboxNotificationClient;
+    }> = [];
+    let reportSecondListen!: () => void;
+    const secondListenReady = new Promise<void>((resolve) => {
+      reportSecondListen = resolve;
+    });
+    const clientFactory = (): OutboxNotificationClient => {
+      const generation = clients.length + 1;
+      const client = new Client({ connectionString });
+      const adapter: OutboxNotificationClient = {
+        connect: async () => {
+          await client.connect();
+        },
+        query: async (sql: string) => {
+          const result = await client.query(sql);
+          if (generation === 2 && sql.startsWith('LISTEN ')) {
+            reportSecondListen();
+          }
+          return result;
+        },
+        end: () => client.end(),
+        on(event: string, handler: (payload: any) => void) {
+          client.on(event as 'notification', handler);
+          return adapter;
+        },
+        off(event: string, handler: (payload: any) => void) {
+          client.off(event as 'notification', handler);
+          return adapter;
+        },
+      };
+      clients.push({ client, adapter });
+      return adapter;
+    };
+    let reportSuccess!: () => void;
+    const dispatchSucceeded = new Promise<void>((resolve) => {
+      reportSuccess = resolve;
+    });
+    const publisher = { publish: jest.fn().mockResolvedValue(undefined) };
+    const options = {
+      prisma,
+      polling: { enabled: false, batchSize: 1 },
+      delivery: { mode: 'publisher' as const },
+      hooks: { onDispatchSuccess: reportSuccess },
+      wakeup: {
+        enabled: true,
+        channel,
+        reconnectDelay: 10,
+        clientFactory,
+      },
+    };
+    const poller = new OutboxPoller(
+      options,
+      publisher,
+      { getHandlers: jest.fn() } as any,
+      { addInterval: jest.fn(), deleteInterval: jest.fn() } as any,
+    );
+    const listener = new OutboxListener(options, poller);
+    await listener.onModuleInit();
+
+    await clients[0].client.end();
+    await withTimeout(secondListenReady, 'second LISTEN generation');
+    await prisma.$executeRaw`
+      INSERT INTO outbox_events (event_type, payload)
+      VALUES ('wakeup.reconnected', '{}'::jsonb)
+    `;
+    await prisma.$executeRaw`SELECT pg_notify(${channel}, 'reconnected')`;
+    await withTimeout(dispatchSucceeded, 'reconnected notification delivery');
+    await listener.onApplicationShutdown();
+
+    expect(clients).toHaveLength(2);
+    expect(publisher.publish).toHaveBeenCalledTimes(1);
   });
 
   it('coalesces notification bursts with polling fallback against PostgreSQL', async () => {
@@ -1247,6 +1693,80 @@ describe('Outbox E2E', () => {
       WHERE event_type = 'retry.persisted-due'
     `;
     expect(terminal).toEqual({ status: 'SENT', nextAttemptAt: null });
+  });
+
+  it('releases a real PostgreSQL claim fetched after shutdown starts', async () => {
+    await prisma.$executeRaw`
+      INSERT INTO outbox_events (event_type, payload)
+      VALUES ('shutdown.unstarted-claim', '{}'::jsonb)
+    `;
+    let reportClaimPersisted!: () => void;
+    const claimPersisted = new Promise<void>((resolve) => {
+      reportClaimPersisted = resolve;
+    });
+    let returnClaim!: () => void;
+    const returnClaimBarrier = new Promise<void>((resolve) => {
+      returnClaim = resolve;
+    });
+    let queryCount = 0;
+    const coordinatedPrisma = {
+      $queryRaw: async (...args: any[]) => {
+        queryCount++;
+        const rows = (await Reflect.apply(
+          prisma.$queryRaw,
+          prisma,
+          args,
+        )) as unknown[];
+        if (queryCount === 1 && rows.length === 1) {
+          reportClaimPersisted();
+          await returnClaimBarrier;
+        }
+        return rows;
+      },
+      $executeRaw: (...args: any[]) =>
+        Reflect.apply(prisma.$executeRaw, prisma, args),
+    };
+    const publisher = { publish: jest.fn().mockResolvedValue(undefined) };
+    const poller = new OutboxPoller(
+      {
+        prisma: coordinatedPrisma,
+        polling: { enabled: false, batchSize: 1 },
+        delivery: { mode: 'publisher' },
+      },
+      publisher,
+      { getHandlers: jest.fn() } as any,
+      { addInterval: jest.fn(), deleteInterval: jest.fn() } as any,
+    );
+
+    const polling = poller.poll();
+    await withTimeout(claimPersisted, 'persisted shutdown claim');
+    const shutdown = poller.onApplicationShutdown();
+    returnClaim();
+    await withTimeout(
+      Promise.all([polling, shutdown]).then(() => undefined),
+      'shutdown claim release',
+    );
+
+    expect(publisher.publish).not.toHaveBeenCalled();
+    const [released] = await prisma.$queryRaw<
+      Array<{
+        status: string;
+        claimToken: string | null;
+        leaseExpiresAt: Date | null;
+      }>
+    >`
+      SELECT
+        status,
+        claim_token::text AS "claimToken",
+        lease_expires_at AS "leaseExpiresAt"
+      FROM outbox_events
+      WHERE event_type = 'shutdown.unstarted-claim'
+    `;
+    expect(released).toEqual({
+      status: 'PENDING',
+      claimToken: null,
+      leaseExpiresAt: null,
+    });
   });
 
   it('makes a manual retry due now without resetting its retry count', async () => {

@@ -190,14 +190,14 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 |   19 | `OUT-M17`      | P2       | `DONE`     | S    | 없음                                                                                 | ordering 비보장과 deterministic cursor 계약                         |
 |   20 | `OUT-M18`      | P2       | `DONE`     | M    | `OUT-M05`, `OUT-M07–08`, `OUT-M17`                                                   | admin pagination/retention/bulk 성능                                |
 |   21 | `OUT-M19`      | P2       | `DONE`     | L    | `OUT-M01–02`, `OUT-M05`, `OUT-M10`                                                   | schema upgrade/diagnostic compatibility                             |
-|  22A | `OUT-M20A`     | P2       | `BLOCKED`  | M    | `OUT-M01`, `OUT-M05–06`, `OUT-M10`                                                   | publisher terminal/tenant-context PostgreSQL E2E                    |
-|  22B | `OUT-M20B`     | P2       | `READY`    | M    | `OUT-M03`, `OUT-M09`                                                                 | LISTEN/NOTIFY wakeup/fallback PostgreSQL E2E                        |
-|  22C | `OUT-M20C`     | P2       | `READY`    | M    | `OUT-M02`, `OUT-M05`, `OUT-M19`                                                      | shutdown/retry/upgrade 통합 PostgreSQL E2E                          |
+|  22A | `OUT-M20A`     | P2       | `DONE`     | M    | `OUT-M01`, `OUT-M05–06`, `OUT-M10`                                                   | publisher terminal/tenant-context PostgreSQL E2E                    |
+|  22B | `OUT-M20B`     | P2       | `DONE`     | M    | `OUT-M03`, `OUT-M09`                                                                 | LISTEN/NOTIFY wakeup/fallback PostgreSQL E2E                        |
+|  22C | `OUT-M20C`     | P2       | `DONE`     | M    | `OUT-M02`, `OUT-M05`, `OUT-M19`                                                      | shutdown/retry/upgrade 통합 PostgreSQL E2E                          |
 |   23 | `OUT-M22`      | P2       | `READY`    | M    | 없음                                                                                 | dev dependency audit remediation                                    |
 |   24 | `OUT-M23`      | P2       | `DECISION` | M    | 없음                                                                                 | explicit root/SQL package export 계약                               |
 |   25 | `OUT-M24`      | P2       | `READY`    | S    | 없음                                                                                 | 과거 문서 권위와 현재 handover 정리                                 |
 |   26 | `OUT-M25`      | P2       | `BLOCKED`  | M    | `OUT-M06`, `OUT-M11`, `OUT-M23`                                                      | typechecked packed examples                                         |
-|   27 | `OUT-M26`      | P2       | `BLOCKED`  | S    | `OUT-M01–02`, `OUT-M08–09`, `OUT-M20A–C`                                             | critical branch coverage gate                                       |
+|   27 | `OUT-M26`      | P2       | `READY`    | S    | `OUT-M01–02`, `OUT-M08–09`, `OUT-M20A–C`                                             | critical branch coverage gate                                       |
 |   28 | `OUT-M27`      | P3       | `READY`    | M    | 없음                                                                                 | benchmark harness 복구                                              |
 |   29 | `OUT-M28`      | P3       | `DECISION` | S    | 없음                                                                                 | sourcemap/source packaging 계약                                     |
 |   30 | `OUT-M29`      | P3       | `BLOCKED`  | M    | `OUT-M02`, `OUT-M04A–05`, `OUT-M12`, `OUT-M18`                                       | SECURITY/support/operations runbook                                 |
@@ -563,21 +563,27 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 
 ### `OUT-M20A` — publisher terminal과 tenant-context PostgreSQL E2E
 
-- 선행: `OUT-M01`, `OUT-M05–06`, `OUT-M10`.
-- 이미 있는 fresh migration·explicit tenant test를 중복하지 않고 publisher final `FAILED`, provider-derived tenant 저장, ambient context 복원을 실제 PostgreSQL에서 검증한다.
-- shutdown 중 publisher callback 거부가 retriable Outbox 상태로 남는지는 dev-only fake transport로 검증한다.
+- 상태: `P2 / DONE`; 선행 `OUT-M01`, `OUT-M05–06`, `OUT-M10` 완료.
+- [x] 이미 있는 fresh migration·explicit tenant test를 중복하지 않고 publisher final `FAILED`, provider-derived tenant 저장, ambient context 복원을 실제 PostgreSQL에서 검증한다.
+- [x] shutdown 중 publisher callback 거부가 retriable Outbox 상태로 남는지는 dev-only fake transport로 검증한다.
+
+검증: 프로필 A/B/C/F. terminal `FAILED`는 retry/error와 claim/lease 정리를 저장하고 `processed_at`은 성공 `SENT` 시각 의미를 유지해 null이다. provider-derived row는 persisted tenant를 local handler의 ambient context로 복원한 뒤 바깥 context를 비운다. runtime/API/schema 변화는 없다.
 
 ### `OUT-M20B` — LISTEN/NOTIFY wakeup과 fallback PostgreSQL E2E
 
-- 선행: `OUT-M03`, `OUT-M09`.
-- LISTEN 준비 전/후 notification, burst coalescing, notification loss 뒤 polling fallback, reconnect 세대를 deterministic barrier로 검증한다.
-- 임의 sleep 대신 readiness hook과 eventual assertion을 사용한다.
+- 상태: `P2 / DONE`; 선행 `OUT-M03`, `OUT-M09` 완료.
+- [x] LISTEN 준비 전/후 notification, burst coalescing, notification loss 뒤 polling fallback, reconnect 세대를 deterministic barrier로 검증한다.
+- [x] 임의 sleep 대신 readiness hook과 eventual assertion을 사용한다.
+
+검증: 프로필 A/B/C/F. 실제 `pg.Client`의 LISTEN 완료, 101 notification 관측, reconnect generation 2 LISTEN, dispatch-success promise를 barrier로 사용했다. timeout은 실패 guard일 뿐 성공 판정용 sleep이 아니다. runtime/API/schema 변화는 없다.
 
 ### `OUT-M20C` — shutdown/retry/upgrade 통합 PostgreSQL E2E
 
-- 선행: `OUT-M02`, `OUT-M05`, `OUT-M19`.
-- 미시작 claim shutdown 반납, 서로 다른 process config에서도 저장된 due time 사용, fresh/v0.1/v0.2 upgrade 뒤 runtime 처리를 통합 fixture로 검증한다.
-- 실제 co-located Jobs lifecycle 조합은 `JOBS-M22`와 `TEN-ECO-NEXT`가 소유하며 Outbox에 Jobs runtime dependency를 추가하지 않는다.
+- 상태: `P2 / DONE`; 선행 `OUT-M02`, `OUT-M05`, `OUT-M19` 완료.
+- [x] 미시작 claim shutdown 반납, 서로 다른 process config에서도 저장된 due time 사용, fresh/v0.1/v0.2 upgrade 뒤 runtime 처리를 통합 fixture로 검증한다.
+- [x] 실제 co-located Jobs lifecycle 조합은 `JOBS-M22`와 `TEN-ECO-NEXT`가 소유하며 Outbox에 Jobs runtime dependency를 추가하지 않는다.
+
+검증: 프로필 A/B/C/F. 실제 DB claim commit 뒤 shutdown barrier로 미dispatch `PENDING` 반납을 확인했고, mixed retry config는 stored `next_attempt_at`만 따른다. exact v0.1.0/v0.2.1 fixture upgrade 뒤 보존 pending row가 `SENT`로 처리된다. runtime/API/schema 변화는 없다.
 
 ### `OUT-M22` — dev dependency audit remediation
 
@@ -776,6 +782,9 @@ Outbox ── durable record / publisher callback ──> Jobs adapter ──> J
 | 2026-09-03 | `OUT-M17`   | `DONE`     | local main `2c83fa1` working tree                | `(created_at,id)` cursor unit + identical timestamp PostgreSQL E2E PASS                         | 선행이 해소된 `OUT-M18`을 `READY`로 전환                               |
 | 2026-09-03 | `OUT-M18`   | `DONE`     | local main `c1bd9e6` working tree                | unit 193; PostgreSQL E2E 31; 10,001 retry + 20,000행 EXPLAIN; packed Prisma 5/7 PASS            | 완료된 M19와 함께 review/commit/push/PR                                |
 | 2026-09-03 | `OUT-M19`   | `DONE`     | local main `c1bd9e6` working tree                | v0.1.0/v0.2.1 checksum + 2회 upgrade; typed schema 진단; exact tgz SQL/README 검증 PASS         | 선행이 해소된 `OUT-M20C`를 `READY`로 전환                              |
+| 2026-09-03 | `OUT-M20A`  | `DONE`     | local main `fc782b5` working tree                | publisher final FAILED, provider tenant/ambient context, shutdown rejection; unit/E2E PASS      | M20B/C와 함께 review/commit/push/PR                                    |
+| 2026-09-03 | `OUT-M20B`  | `DONE`     | local main `fc782b5` working tree                | real LISTEN readiness/burst/loss fallback/reconnect generation; PostgreSQL E2E 38 PASS          | M20A/C와 함께 review/commit/push/PR                                    |
+| 2026-09-03 | `OUT-M20C`  | `DONE`     | local main `fc782b5` working tree                | real shutdown release, mixed retry due, v0.1/v0.2 upgraded runtime; packed Prisma 7 PASS        | `OUT-M26` 선행 해소; 다음 낮은 번호 `OUT-M22` 진행                     |
 
 ### `OUT-M01` 종료 인계
 
@@ -1090,4 +1099,49 @@ Unverified paths and reason: 원격 GitHub Actions와 실제 production-size loc
 External PR, run, release evidence: 없음. disposable PostgreSQL 16과 branch-local exact tarball을 사용했고 report에 fixture provenance와 plan을 기록했다.
 Remaining risk: CHECK 재검증과 old index replacement는 큰 table에서 lock을 획득할 수 있어 maintenance window가 필요하다. structural version은 migration history table이 아니라 required object inventory이며 application이 같은 이름을 다른 정의로 교체한 semantic drift까지 전부 증명하지 않는다.
 Next exact action: OUT-M18과 함께 review/commit/push/PR하고 원격 CI를 확인한다. 선행이 해소된 다음 작업은 OUT-M20C다.
+```
+
+### `OUT-M20A` 종료 인계
+
+```text
+Task: OUT-M20A
+State: DONE
+Start ref / end ref: local main@fc782b5 / local working tree (uncommitted)
+Changed files: publisher/tenant/shutdown contract tests, shared PostgreSQL E2E evidence report, CHANGELOG, maintenance plan
+Contract / semver decision: terminal publisher rejection stores FAILED with final retry/error and cleared claim/lease; processed_at remains the successful SENT timestamp and is null for FAILED. Provider-derived tenant is persisted and restored only around local handler execution. No runtime API, schema, or semver change.
+Commands and exact results: focused poller unit 51 PASS; full unit 10 suites/194 tests PASS; PostgreSQL 16 E2E 1 suite/38 tests PASS; lint, build typecheck/build, scoped Prettier PASS; strict packed Nest 11.2.1/Prisma 7.10.0 PostgreSQL smoke PASS (sha512-cDQpwCY3BMJqGhlZ8c0vBnuGzEwDr4RFcKcTq6MInys+QmKShzqH4tYRc05yW9FVDcz3Y3hLNEz+eg479SQjkA==)
+Unverified paths and reason: 원격 GitHub Actions는 push 전이므로 미실행이다.
+External PR, run, release evidence: 없음. disposable compose project outbox-out-m20-20260903과 docs/reports/2026-09-03-out-m20-postgresql-e2e.md에 local evidence를 기록했다.
+Remaining risk: publisher acceptance와 SENT 사이 process loss는 기존 at-least-once 중복 창으로 남고 consumer 멱등성이 필요하다.
+Next exact action: OUT-M20A–C 변경을 함께 review/commit/push/PR하고 원격 PostgreSQL lane을 확인한다.
+```
+
+### `OUT-M20B` 종료 인계
+
+```text
+Task: OUT-M20B
+State: DONE
+Start ref / end ref: local main@fc782b5 / local working tree (uncommitted)
+Changed files: real pg.Client LISTEN readiness/burst/loss fallback/reconnect E2E, shared PostgreSQL E2E evidence report, CHANGELOG, maintenance plan
+Contract / semver decision: LISTEN/NOTIFY remains a latency hint and polling remains the source of truth. Pre-LISTEN notification loss, one queued rerun under 101 notifications, timer fallback without notify, and generation-2 reconnect delivery are test-only evidence; no runtime API, schema, or semver change.
+Commands and exact results: full unit 10 suites/194 tests PASS; PostgreSQL 16 E2E 1 suite/38 tests PASS; real LISTEN readiness/burst/loss/reconnect cases PASS; lint, build typecheck/build, scoped Prettier PASS; strict packed Prisma 7 PostgreSQL smoke PASS with the M20A digest
+Unverified paths and reason: actual server restart/network partition은 listener unit의 connection failure와 real client disconnect/reconnect 조합으로 대체했다. 원격 CI는 push 전이므로 미실행이다.
+External PR, run, release evidence: 없음. loopback-only PostgreSQL 16과 evidence report를 사용했다.
+Remaining risk: polling disabled 구성은 runtime disconnect부터 reconnect까지 delivery가 지연되며 notification 자체는 durable queue가 아니다.
+Next exact action: OUT-M20A–C 변경을 함께 review/commit/push/PR하고 원격 PostgreSQL lane을 확인한다.
+```
+
+### `OUT-M20C` 종료 인계
+
+```text
+Task: OUT-M20C
+State: DONE
+Start ref / end ref: local main@fc782b5 / local working tree (uncommitted)
+Changed files: real PostgreSQL shutdown claim barrier, mixed retry due-time regression, historical schema runtime delivery, shared evidence report, CHANGELOG, maintenance plan
+Contract / semver decision: shutdown starts after a real claim commit and returns the unstarted row to unclaimed PENDING; process-local retry config cannot override persisted next_attempt_at; exact v0.1.0/v0.2.1 upgraded pending rows are runtime-deliverable. No Jobs dependency and no runtime API/schema/semver change.
+Commands and exact results: full unit 10 suites/194 tests PASS; PostgreSQL 16 E2E 1 suite/38 tests PASS; exact historical fixture checksum/upgrade/runtime cases PASS; strict packed Nest 11.2.1/Prisma 7.10.0 PostgreSQL smoke PASS; lint, build typecheck/build, scoped Prettier PASS
+Unverified paths and reason: co-located Jobs/Redis/BullMQ crash/restart lifecycle is intentionally owned by JOBS-M22/TEN-ECO-NEXT. 원격 CI는 push 전이므로 미실행이다.
+External PR, run, release evidence: 없음. disposable PostgreSQL 16 and evidence report were used; no commit/push/PR/release was performed.
+Remaining risk: upgrade lock duration on production-size tables remains OUT-M19 operational risk; this task proves runtime compatibility after upgrade, not online migration performance.
+Next exact action: OUT-M20A–C 변경을 함께 review/commit/push/PR한다. 모든 선행이 해소된 OUT-M26은 READY이며 queue상 다음 낮은 번호 READY는 OUT-M22다.
 ```
