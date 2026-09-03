@@ -499,11 +499,15 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 
 ### `OUT-M21` — pack-once와 exact artifact publish
 
-- 상태: `P1 / BLOCKED`; 선행 `OUT-M12`
-- verify job에서 tgz를 한 번 만들고 SRI/allowlist/size/root/types/SQL/consumer를 검사한다.
-- publish job은 fresh checkout rebuild가 아니라 검증한 exact tgz를 다운로드해 publish한다.
-- registry integrity와 attestation subject/ref/digest를 사후 검증한다.
-- existing version rerun은 동일 bytes일 때만 idempotent success하고 다른 bytes면 fail한다.
+- 상태: `P1 / BLOCKED`; 로컬 구현·PostgreSQL consumer 검증 완료, 선행 `OUT-M12`와 remote tag/publish 증거 대기
+- [x] build-and-test job에서 tgz를 한 번 만들고 SRI/SHA-256/allowlist/size/root/types/SQL을 검사한 뒤 모든 Node 22 consumer가 같은 tgz를 사용한다.
+- [x] Node 24, manual dry-run, publish job은 rebuild/repack하지 않고 검증한 exact tgz와 metadata를 다운로드해 사용한다.
+- [x] publish 전 registry integrity를 비교하고 existing version은 동일 bytes일 때만 idempotent skip하며 다른 bytes면 fail한다.
+- [x] publish 뒤 npm signature와 verified publish/provenance statement에서 subject digest, repository, tag ref, source commit, workflow를 검사한 뒤에만 GitHub Release를 만든다.
+- [x] repository-local workflow policy test와 artifact graph/evidence report를 추가했다.
+- [ ] `OUT-M12` 보호 설정 뒤 manual remote run, 실제 next tag publish/attestation, immutable tag rerun 증거를 기록한다.
+
+구현·로컬 증거: `docs/reports/2026-09-03-out-m21-pack-once.md`.
 
 ## 5. P2 작업 명세
 
@@ -753,6 +757,7 @@ Outbox ── durable record / publisher callback ──> Jobs adapter ──> J
 | 2026-09-03 | `OUT-M12`   | `EXTERNAL` | local main `13bfb8c` working tree                | workflow policy 10 pinned refs PASS; production audit 0; GitHub before-state captured           | 관리자 인증으로 main/tag ruleset와 npm environment policy 적용         |
 | 2026-09-03 | `OUT-M13`   | `DONE`     | local main `13bfb8c` working tree                | exact packed Prisma 5.22.0/6.19.3 + preserved 7.10.0 PostgreSQL consumers PASS                  | 원격 Node 22 CI lane 확인 후 release 선행 작업 계속                    |
 | 2026-09-03 | `OUT-M14`   | `DONE`     | local main `5a032e3` working tree                | Node 22/24 exact Nest 12/Schedule 12 packed PostgreSQL consumers; unit/E2E/policy/audit PASS    | 변경 review 후 commit/push/PR하고 원격 Node 22/24 matrix 확인          |
+| 2026-09-03 | `OUT-M21`   | `BLOCKED`  | local main `7650295` working tree                | pack-once 117 files/55,692 B; exact Nest 10/11/12 + Prisma 5/6/7 consumer; policy 19 refs PASS  | `OUT-M12` 완료 후 manual run과 next tag publish/attestation/rerun 증거 |
 
 ### `OUT-M01` 종료 인계
 
@@ -977,4 +982,19 @@ Unverified paths and reason: 원격 GitHub Actions의 Node 22/24 matrix와 Node 
 External PR, run, release evidence: Node 공식 release/EOL 표와 npm의 current NestJS/Schedule manifest를 ADR 0007에 연결했다. commit/push/PR/release는 수행하지 않았다.
 Remaining risk: peer range의 모든 조합을 전수 증명하지는 않으며 exact control tuples가 회귀 증거다. Node 26 canary 성공은 지원 선언이 아니고 LTS 승격 뒤 별도 정책 결정이 필요하다.
 Next exact action: diff를 review한 뒤 OUT-M14 파일만 commit/push/PR하고 원격 Node 22/24 필수 matrix와 Node 26 allowed-failure canary 결과를 확인한다.
+```
+
+### `OUT-M21` 종료 인계
+
+```text
+Task: OUT-M21
+State: BLOCKED (로컬 구현·검증 완료, OUT-M12와 remote release 증거 대기)
+Start ref / end ref: local main@7650295532c26a8da8a9eeb2f7a608371f686632 / local working tree (uncommitted)
+Changed files: pack-once release workflow와 immutable artifact upload/download, artifact allowlist/digest/registry/provenance verifier, exact-artifact modern/legacy consumer 입력, workflow policy/attestation parser fixture, CHANGELOG, evidence report, maintenance plan
+Contract / semver decision: Node 22 source gate가 package.tgz를 한 번만 만들고 metadata의 SRI/SHA-256/file list/size/source ref와 결합한다. Node 24/manual/publish는 rebuild/repack 없이 그 bytes만 사용한다. existing version은 registry SRI가 같으면 publish를 idempotent skip하고 다르면 fail한다. publish 뒤 npm이 cryptographically verified한 publish/SLSA statements의 subject digest와 repository/tag/commit/workflow가 모두 맞아야 GitHub Release가 진행된다. package runtime/API 변화가 없는 release hardening이다.
+Commands and exact results: 첫 RED npm run test:workflow-policy는 missing verify-published job으로 FAIL; 최종 workflow policy 19 immutable action refs PASS; YAML parse, Prettier, git diff --check PASS; unit 9 suites/174 tests PASS; lint, build typecheck, build PASS; PostgreSQL 16 E2E 1 suite/27 tests PASS; pack/verify 117 files, 55,692 packed bytes, 253,963 unpacked bytes, sha512-yDyKkI6p2p/SbTy5DZiHIGRykxe1lPNbfFgfCY28vHN1M3x4wNsLRS9E8jyQY/7XF6NkrpNZSsyDSVBLRawomw==, sha256 3662e508d7eede5a2ef95e59f7e03668d0f2b746c231a6b1c7454c0723a38216; 같은 tgz로 exact Nest 11.2.1/12.0.1 + Prisma 7.10.0과 Nest 10.4.22 + Prisma 5.22.0/6.19.3 install/typecheck/build/PostgreSQL smoke 모두 PASS; local candidate 대 published 0.2.1 different-byte registry guard expected exit 1 PASS; published 0.2.1 identical-byte idempotent skip PASS; 실제 npm 12 signature/attestation bundle로 registry integrity와 publish/provenance subject/ref/commit/workflow end-to-end PASS
+Unverified paths and reason: 새 workflow의 GitHub-hosted Node 22/24 artifact upload/download와 manual dry-run은 push 전이라 미실행이다. next version의 실제 publish, 새 attestation, immutable tag rerun은 release event가 필요하다. OUT-M12 repository/tag/environment/Trusted Publisher 보호 설정이 아직 EXTERNAL이다.
+External PR, run, release evidence: docs/reports/2026-09-03-out-m21-pack-once.md에 graph, artifact contract, local/public registry evidence, 정확한 remote 후속 작업을 기록했다. commit/push/PR/release는 수행하지 않았다.
+Remaining risk: OUT-M12가 끝나기 전에는 tag 이동/환경 우회 차단을 workflow만으로 보장할 수 없다. registry propagation이나 npm signature service 장애는 publish 후 verification을 fail-closed시키며 운영자가 같은 immutable tag run을 재실행해야 한다.
+Next exact action: 변경을 review/commit/push한 뒤 OUT-M12 관리자 설정을 완료하고 workflow_dispatch dry-run을 기록한다. 다음 immutable release tag에서 exact artifact digest와 npm attestation 검증을 기록한 뒤 같은 tag workflow를 재실행해 identical-byte skip을 확인하고 OUT-M21을 DONE으로 바꾼다.
 ```

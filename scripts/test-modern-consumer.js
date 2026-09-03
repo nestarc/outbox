@@ -13,6 +13,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { verifyArtifact } = require('./release-artifact');
 
 const FIXTURE_DIRECTORY = path.join('test', 'modern-consumer', 'fixture');
 const NEST12 = process.argv.includes('--nest12');
@@ -84,6 +85,23 @@ function stageCandidatePackage(workspaceDirectory, temporaryDirectory) {
 }
 
 function packPackage(workspaceDirectory, temporaryDirectory) {
+  if (process.env.OUTBOX_TGZ || process.env.OUTBOX_TGZ_METADATA) {
+    if (CANDIDATE_MANIFEST) {
+      throw new Error('candidate manifest cannot reuse a release artifact');
+    }
+    if (!process.env.OUTBOX_TGZ || !process.env.OUTBOX_TGZ_METADATA) {
+      throw new Error(
+        'OUTBOX_TGZ and OUTBOX_TGZ_METADATA must be set together',
+      );
+    }
+    const tarballPath = path.resolve(process.env.OUTBOX_TGZ);
+    const metadata = verifyArtifact(
+      tarballPath,
+      path.resolve(process.env.OUTBOX_TGZ_METADATA),
+    );
+    return { path: tarballPath, integrity: metadata.integrity };
+  }
+
   const packageDirectory = CANDIDATE_MANIFEST
     ? stageCandidatePackage(workspaceDirectory, temporaryDirectory)
     : workspaceDirectory;

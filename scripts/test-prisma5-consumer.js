@@ -8,6 +8,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { verifyArtifact } = require('./release-artifact');
 
 const FIXTURE_DIRECTORY = path.join('test', 'prisma5-consumer', 'fixture');
 const PRISMA_VERSION = process.argv.includes('--prisma6') ? '6.19.3' : '5.22.0';
@@ -78,30 +79,45 @@ function main() {
   const env = strictInstallEnvironment(temporaryDirectory);
 
   try {
-    const packOutput = execFileSync(
-      'npm',
-      [
-        'pack',
-        '--ignore-scripts',
-        '--json',
-        '--pack-destination',
-        temporaryDirectory,
-      ],
-      { cwd: workspaceDirectory, encoding: 'utf8', env },
-    );
-    const packed = JSON.parse(packOutput)[0];
-    if (!packed?.filename || !packed?.integrity) {
-      throw new Error(
-        'npm pack did not return filename and integrity metadata',
+    let tarballPath;
+    let computedIntegrity;
+    if (process.env.OUTBOX_TGZ || process.env.OUTBOX_TGZ_METADATA) {
+      if (!process.env.OUTBOX_TGZ || !process.env.OUTBOX_TGZ_METADATA) {
+        throw new Error(
+          'OUTBOX_TGZ and OUTBOX_TGZ_METADATA must be set together',
+        );
+      }
+      tarballPath = path.resolve(process.env.OUTBOX_TGZ);
+      computedIntegrity = verifyArtifact(
+        tarballPath,
+        path.resolve(process.env.OUTBOX_TGZ_METADATA),
+      ).integrity;
+    } else {
+      const packOutput = execFileSync(
+        'npm',
+        [
+          'pack',
+          '--ignore-scripts',
+          '--json',
+          '--pack-destination',
+          temporaryDirectory,
+        ],
+        { cwd: workspaceDirectory, encoding: 'utf8', env },
       );
-    }
-    const tarballPath = path.join(temporaryDirectory, packed.filename);
-    const computedIntegrity = `sha512-${crypto
-      .createHash('sha512')
-      .update(fs.readFileSync(tarballPath))
-      .digest('base64')}`;
-    if (computedIntegrity !== packed.integrity) {
-      throw new Error('packed tarball integrity does not match npm metadata');
+      const packed = JSON.parse(packOutput)[0];
+      if (!packed?.filename || !packed?.integrity) {
+        throw new Error(
+          'npm pack did not return filename and integrity metadata',
+        );
+      }
+      tarballPath = path.join(temporaryDirectory, packed.filename);
+      computedIntegrity = `sha512-${crypto
+        .createHash('sha512')
+        .update(fs.readFileSync(tarballPath))
+        .digest('base64')}`;
+      if (computedIntegrity !== packed.integrity) {
+        throw new Error('packed tarball integrity does not match npm metadata');
+      }
     }
 
     fs.cpSync(

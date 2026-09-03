@@ -5,10 +5,11 @@ name: Release
 #
 # Flow:
 #   1. verify job reads package.json version and confirms it matches the tag.
-#   2. build-and-test runs the Node 22 prepublish chain and supported packed
-#      PostgreSQL consumers, including exact NestJS 12 / Schedule 12.
-#   3. compatibility-node24 repeats the NestJS 12 packed PostgreSQL control.
-#   4. a tag-only npm job publishes through Trusted Publishing with OIDC.
+#   2. build-and-test runs the Node 22 prepublish chain, packs exactly once,
+#      verifies the allowlist/SRI, and tests every Node 22 consumer against it.
+#   3. compatibility-node24 downloads and tests those exact tarball bytes.
+#   4. tag-only jobs publish that tarball through Trusted Publishing, then
+#      verify registry integrity and the signed provenance subject/ref/digest.
 #   5. a separate tag-only job creates the GitHub Release with contents write.
 #
 # Permissions:
@@ -119,6 +120,8 @@ jobs:
 
     env:
       DATABASE_URL: postgresql://test:test@localhost:5433/outbox_test
+      OUTBOX_TGZ: ${{ github.workspace }}/release-artifact/package.tgz
+      OUTBOX_TGZ_METADATA: ${{ github.workspace }}/release-artifact/metadata.json
 
     steps:
       - name: Checkout
@@ -142,6 +145,9 @@ jobs:
 
       - name: Prisma 7.10.0 PostgreSQL E2E
         run: npm run test:e2e
+
+      - name: Pack and verify the release artifact once
+        run: node scripts/release-artifact.js pack release-artifact
 
       - name: Strict packed NestJS 11.2.1 + Prisma 7.10.0 consumer
         run: npm run test:modern-consumer
@@ -183,12 +189,20 @@ jobs:
       - name: Legacy Prisma 6.19.3 PostgreSQL E2E
         run: npm run test:e2e
 
-      - name: Pack (dry run)
-        run: npm pack --dry-run
+      - name: Re-verify exact release artifact after all gates
+        run: node scripts/release-artifact.js verify "$OUTBOX_TGZ" "$OUTBOX_TGZ_METADATA"
+
+      - name: Upload exact release artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-package-${{ github.sha }}-${{ github.run_attempt }}
+          path: release-artifact/
+          if-no-files-found: error
+          retention-days: 14
 
   compatibility-node24:
     name: Node 24 + NestJS 12 compatibility
-    needs: verify
+    needs: [verify, build-and-test]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -210,6 +224,8 @@ jobs:
 
     env:
       DATABASE_URL: postgresql://test:test@localhost:5433/outbox_test
+      OUTBOX_TGZ: ${{ github.workspace }}/release-artifact/package.tgz
+      OUTBOX_TGZ_METADATA: ${{ github.workspace }}/release-artifact/metadata.json
 
     steps:
       - name: Checkout
@@ -219,13 +235,18 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '24'
-          cache: npm
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Download exact release artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-package-${{ github.sha }}-${{ github.run_attempt }}
+          path: release-artifact
+
+      - name: Verify exact release artifact
+        run: node scripts/release-artifact.js verify "$OUTBOX_TGZ" "$OUTBOX_TGZ_METADATA"
 
       - name: Strict packed NestJS 12.0.1 + Schedule 12.0.1 + Prisma 7.10.0 consumer
-        run: npm run test:nest12-consumer
+        run: node scripts/test-modern-consumer.js --nest12
 
   manual-dry-run:
     name: Manual npm publish dry-run
@@ -234,6 +255,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      OUTBOX_TGZ: ${{ github.workspace }}/release-artifact/package.tgz
+      OUTBOX_TGZ_METADATA: ${{ github.workspace }}/release-artifact/metadata.json
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -244,11 +268,17 @@ jobs:
           node-version: '24'
           registry-url: https://registry.npmjs.org
 
-      - name: Install and build
-        run: npm ci && npm run build
+      - name: Download exact release artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-package-${{ github.sha }}-${{ github.run_attempt }}
+          path: release-artifact
+
+      - name: Verify exact release artifact
+        run: node scripts/release-artifact.js verify "$OUTBOX_TGZ" "$OUTBOX_TGZ_METADATA"
 
       - name: Publish dry-run
-        run: npm publish --access public --dry-run
+        run: npm publish "$OUTBOX_TGZ" --ignore-scripts --access public --dry-run
 
   publish-npm:
     name: Publish to npm
@@ -259,6 +289,9 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    env:
+      OUTBOX_TGZ: ${{ github.workspace }}/release-artifact/package.tgz
+      OUTBOX_TGZ_METADATA: ${{ github.workspace }}/release-artifact/metadata.json
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -269,22 +302,72 @@ jobs:
           node-version: '24'
           registry-url: https://registry.npmjs.org
 
-      - name: Install dependencies
-        run: npm ci
-
       - name: Show npm version
         run: npm --version
 
-      - name: Build
-        run: npm run build
+      - name: Download exact release artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-package-${{ github.sha }}-${{ github.run_attempt }}
+          path: release-artifact
+
+      - name: Verify exact release artifact
+        run: node scripts/release-artifact.js verify "$OUTBOX_TGZ" "$OUTBOX_TGZ_METADATA"
+
+      - name: Check whether this exact version already exists
+        id: registry
+        run: node scripts/release-artifact.js registry-check "$OUTBOX_TGZ" "$OUTBOX_TGZ_METADATA"
 
       - name: Publish
-        run: npm publish --provenance --access public
+        if: steps.registry.outputs.action == 'publish'
+        run: npm publish "$OUTBOX_TGZ" --ignore-scripts --provenance --access public
+
+  verify-published:
+    name: Verify published integrity and provenance
+    if: github.event_name == 'push'
+    needs: [verify, publish-npm]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      OUTBOX_TGZ: ${{ github.workspace }}/release-artifact/package.tgz
+      OUTBOX_TGZ_METADATA: ${{ github.workspace }}/release-artifact/metadata.json
+      PACKAGE_SPEC: '@nestarc/outbox@${{ needs.verify.outputs.version }}'
+    steps:
+      - name: Checkout verification code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Node with npm registry
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.15.0'
+          registry-url: https://registry.npmjs.org
+
+      - name: Download exact release artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-package-${{ github.sha }}-${{ github.run_attempt }}
+          path: release-artifact
+
+      - name: Verify exact release artifact
+        run: node scripts/release-artifact.js verify "$OUTBOX_TGZ" "$OUTBOX_TGZ_METADATA"
+
+      - name: Install published package and verify npm signatures
+        run: |
+          npm install --global npm@12.0.2
+          AUDIT_DIR=$(mktemp -d)
+          cd "$AUDIT_DIR"
+          npm init --yes
+          npm install --ignore-scripts --no-audit --no-fund "$PACKAGE_SPEC"
+          npm audit signatures --json --include-attestations > "$GITHUB_WORKSPACE/release-artifact/attestation-audit.json"
+
+      - name: Verify registry integrity and provenance subject/ref/digest
+        run: node scripts/release-artifact.js verify-published "$OUTBOX_TGZ" "$OUTBOX_TGZ_METADATA" release-artifact/attestation-audit.json
 
   github-release:
     name: Create GitHub Release
     if: github.event_name == 'push'
-    needs: [verify, build-and-test, publish-npm]
+    needs: [verify, verify-published]
     runs-on: ubuntu-latest
     permissions:
       contents: write

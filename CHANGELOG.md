@@ -93,6 +93,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Testing
 
+- Release verification now packs one allowlisted tarball, records its SHA-512
+  SRI and SHA-256 digest, and passes those exact bytes through every packed
+  consumer, the Node 24 control, manual dry-run, and npm publish. Reruns skip
+  an existing version only when registry integrity is identical; post-publish
+  verification checks npm signatures plus the provenance subject, tag ref,
+  source commit, and release workflow before the GitHub Release is created.
 - CI requires Node 22 and 24 controls, including exact NestJS 12.0.1 + Schedule
   12.0.1 + Prisma 7.10.0 strict packed PostgreSQL consumers. Release
   verification requires the same Node controls, while Node 26 is isolated in
