@@ -16,6 +16,10 @@ import type {
   OutboxTenantProvider,
 } from './interfaces/outbox-tenancy.interface';
 import type { OutboxEvent } from './outbox.event';
+import {
+  OutboxEnvelopeError,
+  type OutboxEnvelopeErrorReason,
+} from './errors/outbox-envelope.error';
 
 interface PreparedOutboxRow {
   eventType: string;
@@ -35,6 +39,14 @@ interface PreparedOutboxRow {
 }
 
 const DEFAULT_WAKEUP_CHANNEL = 'outbox_events';
+const MAX_IDENTIFIER_LENGTH = 255;
+const MAX_PAYLOAD_BYTES = 1024 * 1024;
+const MAX_HEADERS_BYTES = 64 * 1024;
+const MAX_HEADER_VALUE_LENGTH = 8192;
+const MAX_JSON_DEPTH = 100;
+// 12 bind values per row. 1,000 stays well below PostgreSQL's 65,535 bind
+// limit and JavaScript engines' practical variadic-call argument limit.
+const EMIT_MANY_CHUNK_SIZE = 1000;
 
 @Injectable()
 export class OutboxEmitter {
@@ -57,6 +69,55 @@ export class OutboxEmitter {
   ): Promise<void> {
     const row = await this.prepareRow(event, options);
 
+    await this.insertPreparedRow(tx, row);
+
+    await this.notify(tx, row.eventType);
+    await this.runOnEmitHook(row);
+  }
+
+  async emitMany(
+    tx: PrismaTransactionClient,
+    events: OutboxEmitManyEntry[],
+  ): Promise<void> {
+    if (events.length === 0) return;
+
+    // Validate the complete envelope before staging any row. This keeps the
+    // fallback path all-or-nothing even when a caller catches validation errors.
+    const rows = await Promise.all(
+      events.map((entry) => {
+        const normalized = this.normalizeEntry(entry);
+        return this.prepareRow(normalized.event, normalized.options);
+      }),
+    );
+
+    if (tx.$executeRawUnsafe) {
+      for (
+        let offset = 0;
+        offset < rows.length;
+        offset += EMIT_MANY_CHUNK_SIZE
+      ) {
+        await this.insertPreparedRows(
+          tx,
+          rows.slice(offset, offset + EMIT_MANY_CHUNK_SIZE),
+        );
+      }
+    } else {
+      for (const row of rows) {
+        await this.insertPreparedRow(tx, row);
+      }
+    }
+
+    await this.notify(tx, rows[0]?.eventType ?? 'outbox.events');
+
+    for (const row of rows) {
+      await this.runOnEmitHook(row);
+    }
+  }
+
+  private async insertPreparedRow(
+    tx: PrismaTransactionClient,
+    row: PreparedOutboxRow,
+  ): Promise<void> {
     await tx.$executeRaw`
       INSERT INTO outbox_events (
         event_type,
@@ -87,32 +148,12 @@ export class OutboxEmitter {
         COALESCE(${row.occurredAt}, NOW())
       )
     `;
-
-    await this.notify(tx, row.eventType);
-    await this.runOnEmitHook(row);
   }
 
-  async emitMany(
+  private async insertPreparedRows(
     tx: PrismaTransactionClient,
-    events: OutboxEmitManyEntry[],
+    rows: PreparedOutboxRow[],
   ): Promise<void> {
-    if (events.length === 0) return;
-
-    if (!tx.$executeRawUnsafe) {
-      for (const entry of events) {
-        const normalized = this.normalizeEntry(entry);
-        await this.emit(tx, normalized.event, normalized.options);
-      }
-      return;
-    }
-
-    const rows = await Promise.all(
-      events.map((entry) => {
-        const normalized = this.normalizeEntry(entry);
-        return this.prepareRow(normalized.event, normalized.options);
-      }),
-    );
-
     const values: unknown[] = [];
     const valueGroups = rows.map((row) => {
       const offset = values.length;
@@ -134,7 +175,7 @@ export class OutboxEmitter {
       return `($${offset + 1}, $${offset + 2}::jsonb, $${offset + 3}, $${offset + 4}, $${offset + 5}, $${offset + 6}, $${offset + 7}, $${offset + 8}, $${offset + 9}, $${offset + 10}, $${offset + 11}::jsonb, COALESCE($${offset + 12}::timestamptz, NOW()))`;
     });
 
-    await tx.$executeRawUnsafe(
+    await tx.$executeRawUnsafe!(
       `
         INSERT INTO outbox_events (
           event_type,
@@ -154,12 +195,6 @@ export class OutboxEmitter {
       `,
       ...values,
     );
-
-    await this.notify(tx, rows[0]?.eventType ?? 'outbox.events');
-
-    for (const row of rows) {
-      await this.runOnEmitHook(row);
-    }
   }
 
   private normalizeEntry(entry: OutboxEmitManyEntry): {
@@ -177,24 +212,52 @@ export class OutboxEmitter {
     event: OutboxEvent,
     options?: OutboxEmitOptions,
   ): Promise<PreparedOutboxRow> {
-    const payload = event.toPayload();
-    const headers = options?.headers ?? {};
+    const eventType = this.validateIdentifier(
+      event.getEventType(),
+      'eventType',
+    );
+    const { value: payload, json: payloadJson } = this.normalizeJsonObject(
+      event.toPayload(),
+      'payload',
+      MAX_PAYLOAD_BYTES,
+    );
+    const { value: headers, json: headersJson } = this.normalizeHeaders(
+      options?.headers,
+    );
 
     return {
-      eventType: event.getEventType(),
+      eventType,
       payload,
-      payloadJson: JSON.stringify(payload),
+      payloadJson,
       maxRetries: this.maxRetries,
       tenantId: await this.resolveTenantId(options),
-      aggregateType: options?.aggregateType ?? null,
-      aggregateId: options?.aggregateId ?? null,
-      partitionKey: options?.partitionKey ?? null,
-      idempotencyKey: options?.idempotencyKey ?? null,
-      correlationId: options?.correlationId ?? null,
-      causationId: options?.causationId ?? null,
+      aggregateType: this.validateOptionalIdentifier(
+        options?.aggregateType,
+        'aggregateType',
+      ),
+      aggregateId: this.validateOptionalIdentifier(
+        options?.aggregateId,
+        'aggregateId',
+      ),
+      partitionKey: this.validateOptionalIdentifier(
+        options?.partitionKey,
+        'partitionKey',
+      ),
+      idempotencyKey: this.validateOptionalIdentifier(
+        options?.idempotencyKey,
+        'idempotencyKey',
+      ),
+      correlationId: this.validateOptionalIdentifier(
+        options?.correlationId,
+        'correlationId',
+      ),
+      causationId: this.validateOptionalIdentifier(
+        options?.causationId,
+        'causationId',
+      ),
       headers,
-      headersJson: JSON.stringify(headers),
-      occurredAt: options?.occurredAt ?? null,
+      headersJson,
+      occurredAt: this.validateOccurredAt(options?.occurredAt),
     };
   }
 
@@ -208,10 +271,16 @@ export class OutboxEmitter {
 
     if (tenantScope !== undefined) {
       if (tenantScope !== 'global') {
-        throw new Error('Outbox tenantScope must be "global" when provided');
+        this.invalid(
+          'tenantScope',
+          'invalid_type',
+          'Outbox tenantScope must be "global" when provided',
+        );
       }
       if (tenantId !== undefined) {
-        throw new Error(
+        this.invalid(
+          'tenantId',
+          'invalid_type',
           'Outbox emit options cannot combine tenantId with tenantScope',
         );
       }
@@ -219,7 +288,9 @@ export class OutboxEmitter {
     }
 
     if (tenantId === null) {
-      throw new Error(
+      this.invalid(
+        'tenantId',
+        'invalid_type',
         'Outbox tenantId cannot be null; use tenantScope: "global" for a global event',
       );
     }
@@ -236,12 +307,16 @@ export class OutboxEmitter {
 
       const providerTenantId = await this.getProviderTenantId();
       if (providerTenantId === null) {
-        throw new Error(
+        this.invalid(
+          'tenantId',
+          'invalid_type',
           'Outbox tenancy policy "require-match" requires a provider tenantId',
         );
       }
       if (providerTenantId !== explicitTenantId) {
-        throw new Error(
+        this.invalid(
+          'tenantId',
+          'invalid_type',
           'Outbox explicit tenantId does not match the provider tenantId',
         );
       }
@@ -253,7 +328,9 @@ export class OutboxEmitter {
 
     if (policy === 'optional') return null;
 
-    throw new Error(
+    return this.invalid(
+      'tenantId',
+      'invalid_type',
       `Outbox tenancy policy "${policy}" requires a tenantId or tenantScope: "global"`,
     );
   }
@@ -265,7 +342,9 @@ export class OutboxEmitter {
       policy !== 'required' &&
       policy !== 'require-match'
     ) {
-      throw new Error(
+      return this.invalid(
+        'tenancy.policy',
+        'invalid_type',
         'Outbox tenancy.policy must be one of: optional, required, require-match',
       );
     }
@@ -283,14 +362,306 @@ export class OutboxEmitter {
 
   private validateTenantId(value: unknown, source: string): string {
     if (typeof value !== 'string') {
-      throw new Error(`Outbox ${source} must be a string`);
+      return this.invalid(
+        'tenantId',
+        'invalid_type',
+        `Outbox ${source} must be a string`,
+      );
     }
     if (value.length === 0 || value.trim() !== value) {
-      throw new Error(
+      return this.invalid(
+        'tenantId',
+        'empty',
         `Outbox ${source} must be non-empty and have no leading or trailing whitespace`,
       );
     }
+    if (value.length > MAX_IDENTIFIER_LENGTH) {
+      return this.invalid(
+        'tenantId',
+        'too_long',
+        `Outbox ${source} must be at most ${MAX_IDENTIFIER_LENGTH} characters`,
+      );
+    }
     return value;
+  }
+
+  private validateIdentifier(value: unknown, field: string): string {
+    if (typeof value !== 'string') {
+      return this.invalid(
+        field,
+        'invalid_type',
+        `Outbox ${field} must be a string`,
+      );
+    }
+    if (value.length === 0 || value.trim() !== value) {
+      return this.invalid(
+        field,
+        'empty',
+        `Outbox ${field} must be non-empty and have no leading or trailing whitespace`,
+      );
+    }
+    if (value.length > MAX_IDENTIFIER_LENGTH) {
+      return this.invalid(
+        field,
+        'too_long',
+        `Outbox ${field} must be at most ${MAX_IDENTIFIER_LENGTH} characters`,
+      );
+    }
+    return value;
+  }
+
+  private validateOptionalIdentifier(
+    value: unknown,
+    field: string,
+  ): string | null {
+    if (value === undefined || value === null) return null;
+    return this.validateIdentifier(value, field);
+  }
+
+  private validateOccurredAt(value: unknown): Date | null {
+    if (value === undefined || value === null) return null;
+    if (!(value instanceof Date)) {
+      return this.invalid(
+        'occurredAt',
+        'invalid_type',
+        'Outbox occurredAt must be a Date',
+      );
+    }
+    if (!Number.isFinite(value.getTime())) {
+      return this.invalid(
+        'occurredAt',
+        'invalid_date',
+        'Outbox occurredAt must be a valid Date',
+      );
+    }
+    return new Date(value.getTime());
+  }
+
+  private normalizeHeaders(value: unknown): {
+    value: Record<string, string>;
+    json: string;
+  } {
+    const headers = value ?? {};
+    if (!this.isPlainObject(headers)) {
+      return this.invalid(
+        'headers',
+        'invalid_type',
+        'Outbox headers must be a plain object of string values',
+      );
+    }
+    if (
+      Object.getOwnPropertySymbols(headers).some((symbol) =>
+        Object.prototype.propertyIsEnumerable.call(headers, symbol),
+      )
+    ) {
+      return this.invalid(
+        'headers',
+        'unsupported_json_value',
+        'Outbox headers must not contain enumerable symbol keys',
+      );
+    }
+
+    const normalized: Record<string, string> = Object.create(null) as Record<
+      string,
+      string
+    >;
+    for (const key of Object.keys(headers)) {
+      this.validateIdentifier(key, `headers.${key || '<empty>'}`);
+      const headerValue = (headers as Record<string, unknown>)[key];
+      if (typeof headerValue !== 'string') {
+        return this.invalid(
+          `headers.${key}`,
+          'invalid_type',
+          `Outbox header "${key}" must be a string`,
+        );
+      }
+      if (headerValue.length > MAX_HEADER_VALUE_LENGTH) {
+        return this.invalid(
+          `headers.${key}`,
+          'too_long',
+          `Outbox header "${key}" must be at most ${MAX_HEADER_VALUE_LENGTH} characters`,
+        );
+      }
+      normalized[key] = headerValue;
+    }
+
+    const json = JSON.stringify(normalized);
+    if (Buffer.byteLength(json, 'utf8') > MAX_HEADERS_BYTES) {
+      return this.invalid(
+        'headers',
+        'too_large',
+        `Outbox headers must serialize to at most ${MAX_HEADERS_BYTES} bytes`,
+      );
+    }
+    return { value: normalized, json };
+  }
+
+  private normalizeJsonObject(
+    value: unknown,
+    field: string,
+    maxBytes: number,
+  ): { value: Record<string, unknown>; json: string } {
+    if (!this.isPlainObject(value)) {
+      return this.invalid(
+        field,
+        'invalid_type',
+        `Outbox ${field} must be a plain JSON object`,
+      );
+    }
+    const normalized = this.normalizeJsonValue(
+      value,
+      field,
+      new Set<object>(),
+      0,
+    ) as Record<string, unknown>;
+    const json = JSON.stringify(normalized);
+    if (Buffer.byteLength(json, 'utf8') > maxBytes) {
+      return this.invalid(
+        field,
+        'too_large',
+        `Outbox ${field} must serialize to at most ${maxBytes} bytes`,
+      );
+    }
+    return { value: normalized, json };
+  }
+
+  private normalizeJsonValue(
+    value: unknown,
+    path: string,
+    ancestors: Set<object>,
+    depth: number,
+  ): unknown {
+    if (depth > MAX_JSON_DEPTH) {
+      return this.invalid(
+        path,
+        'too_deep',
+        `Outbox JSON must not exceed ${MAX_JSON_DEPTH} nested levels`,
+      );
+    }
+    if (
+      value === null ||
+      typeof value === 'string' ||
+      typeof value === 'boolean'
+    ) {
+      return value;
+    }
+    if (typeof value === 'number') {
+      if (Number.isFinite(value)) return value;
+      return this.invalid(
+        path,
+        'unsupported_json_value',
+        `Outbox ${path} must contain only finite JSON numbers`,
+      );
+    }
+    if (typeof value !== 'object') {
+      return this.invalid(
+        path,
+        'unsupported_json_value',
+        `Outbox ${path} contains a value that JSON cannot represent`,
+      );
+    }
+    if (value instanceof Date) {
+      return this.invalid(
+        path,
+        Number.isFinite(value.getTime())
+          ? 'unsupported_json_value'
+          : 'invalid_date',
+        `Outbox ${path} must not contain Date objects`,
+      );
+    }
+    if (ancestors.has(value)) {
+      return this.invalid(
+        path,
+        'circular',
+        `Outbox ${path} contains a circular reference`,
+      );
+    }
+    if (!Array.isArray(value) && !this.isPlainObject(value)) {
+      return this.invalid(
+        path,
+        'unsupported_json_value',
+        `Outbox ${path} must contain only plain JSON objects and arrays`,
+      );
+    }
+    if (
+      Object.getOwnPropertySymbols(value).some((symbol) =>
+        Object.prototype.propertyIsEnumerable.call(value, symbol),
+      )
+    ) {
+      return this.invalid(
+        path,
+        'unsupported_json_value',
+        `Outbox ${path} must not contain enumerable symbol keys`,
+      );
+    }
+
+    ancestors.add(value);
+    try {
+      if (Array.isArray(value)) {
+        const keys = Object.keys(value);
+        const hasOnlyIndexes = keys.every(
+          (key) =>
+            /^(0|[1-9]\d*)$/.test(key) &&
+            Number(key) < value.length &&
+            String(Number(key)) === key,
+        );
+        if (keys.length !== value.length || !hasOnlyIndexes) {
+          return this.invalid(
+            path,
+            'unsupported_json_value',
+            `Outbox ${path} arrays must be dense and contain no extra properties`,
+          );
+        }
+        return value.map((item, index) =>
+          this.normalizeJsonValue(
+            item,
+            `${path}[${index}]`,
+            ancestors,
+            depth + 1,
+          ),
+        );
+      }
+
+      const normalized: Record<string, unknown> = Object.create(null) as Record<
+        string,
+        unknown
+      >;
+      for (const key of Object.keys(value)) {
+        let child: unknown;
+        try {
+          child = (value as Record<string, unknown>)[key];
+        } catch {
+          return this.invalid(
+            `${path}.${key}`,
+            'unsupported_json_value',
+            `Outbox ${path}.${key} could not be read as JSON`,
+          );
+        }
+        normalized[key] = this.normalizeJsonValue(
+          child,
+          `${path}.${key}`,
+          ancestors,
+          depth + 1,
+        );
+      }
+      return normalized;
+    } finally {
+      ancestors.delete(value);
+    }
+  }
+
+  private isPlainObject(value: unknown): value is Record<string, unknown> {
+    if (value === null || typeof value !== 'object') return false;
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
+  }
+
+  private invalid<T = never>(
+    field: string,
+    reason: OutboxEnvelopeErrorReason,
+    message: string,
+  ): T {
+    throw new OutboxEnvelopeError(field, reason, message);
   }
 
   private resolveTenantProvider(): OutboxTenantProvider | undefined {
@@ -306,7 +677,7 @@ export class OutboxEmitter {
     const hook = this.options.hooks?.onEmit;
     if (!hook) return;
 
-    const context: OutboxEmitContext = {
+    const context: OutboxEmitContext = structuredClone({
       eventType: row.eventType,
       payload: row.payload,
       tenantId: row.tenantId,
@@ -318,7 +689,7 @@ export class OutboxEmitter {
       causationId: row.causationId,
       headers: row.headers,
       occurredAt: row.occurredAt,
-    };
+    });
 
     try {
       await hook(context);

@@ -142,6 +142,7 @@ describe('OutboxAdminService', () => {
 
     const [sql, ...values] = prisma.$queryRawUnsafe.mock.calls[0];
     expect(sql).not.toContain('WHERE');
+    expect(sql).toContain('ORDER BY created_at DESC, id DESC');
     expect(values).toEqual([500]);
     expect(rows[0]).toEqual(
       expect.objectContaining({
@@ -151,6 +152,48 @@ describe('OutboxAdminService', () => {
         occurredAt: now,
       }),
     );
+  });
+
+  it('should page with an exclusive versioned created_at and id cursor', async () => {
+    const { service, prisma } = createService();
+    const firstId = '00000000-0000-4000-8000-000000000003';
+    const secondId = '00000000-0000-4000-8000-000000000002';
+    prisma.$queryRawUnsafe
+      .mockResolvedValueOnce([
+        createDbRow({ id: firstId }),
+        createDbRow({ id: secondId }),
+      ])
+      .mockResolvedValueOnce([
+        createDbRow({ id: '00000000-0000-4000-8000-000000000001' }),
+      ]);
+
+    const first = await service.listPage({ limit: 1 });
+    expect(first.records.map((record) => record.id)).toEqual([firstId]);
+    expect(first.nextCursor).toEqual(expect.any(String));
+    const [firstSql, ...firstValues] = prisma.$queryRawUnsafe.mock.calls[0];
+    expect(firstSql).toContain('ORDER BY created_at DESC, id DESC');
+    expect(firstValues).toEqual([2]);
+
+    const second = await service.listPage({
+      limit: 1,
+      cursor: first.nextCursor!,
+    });
+    expect(second.records).toHaveLength(1);
+    const [secondSql, ...secondValues] = prisma.$queryRawUnsafe.mock.calls[1];
+    expect(secondSql).toContain('(created_at, id) <');
+    expect(secondValues).toEqual([now, firstId, 2]);
+  });
+
+  it('should reject malformed and unsupported admin cursors', async () => {
+    const { service, prisma } = createService();
+
+    await expect(
+      service.listPage({ cursor: 'not-a-cursor' }),
+    ).rejects.toMatchObject({
+      name: 'OutboxCursorError',
+      code: 'OUTBOX_INVALID_CURSOR',
+    });
+    expect(prisma.$queryRawUnsafe).not.toHaveBeenCalled();
   });
 
   it('should clamp list limit to at least one', async () => {

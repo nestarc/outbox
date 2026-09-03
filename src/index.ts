@@ -11,6 +11,15 @@ export {
 export { OutboxEmitter } from './outbox.emitter';
 export { OutboxListener } from './outbox.listener';
 export {
+  OUTBOX_INVALID_CURSOR,
+  OutboxCursorError,
+} from './errors/outbox-cursor.error';
+export {
+  OUTBOX_INVALID_ENVELOPE,
+  OutboxEnvelopeError,
+} from './errors/outbox-envelope.error';
+export type { OutboxEnvelopeErrorReason } from './errors/outbox-envelope.error';
+export {
   OUTBOX_INVALID_CONFIGURATION,
   OutboxConfigurationError,
 } from './errors/outbox-configuration.error';
@@ -40,9 +49,12 @@ export type {
   OutboxHealth,
   OutboxHealthOptions,
   OutboxListOptions,
+  OutboxListPage,
   OutboxAdminMutationResult,
+  OutboxPageOptions,
   OutboxStats,
   OutboxTenantListOptions,
+  OutboxTenantPageOptions,
 } from './interfaces/outbox-admin.interface';
 export type {
   OutboxOptions,

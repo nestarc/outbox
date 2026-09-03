@@ -1655,6 +1655,44 @@ describe('Outbox E2E', () => {
     ]);
   });
 
+  it('paginates identical created_at rows without gaps or duplicates', async () => {
+    const createdAt = new Date('2026-01-02T03:04:05.000Z');
+    const expectedIds = [
+      '00000000-0000-4000-8000-000000000003',
+      '00000000-0000-4000-8000-000000000002',
+      '00000000-0000-4000-8000-000000000001',
+    ];
+    await prisma.$executeRaw`
+      INSERT INTO outbox_events (id, event_type, payload, created_at, updated_at, occurred_at)
+      VALUES
+        (${expectedIds[2]}::uuid, 'cursor.same-time-1', '{}'::jsonb, ${createdAt}, ${createdAt}, ${createdAt}),
+        (${expectedIds[0]}::uuid, 'cursor.same-time-3', '{}'::jsonb, ${createdAt}, ${createdAt}, ${createdAt}),
+        (${expectedIds[1]}::uuid, 'cursor.same-time-2', '{}'::jsonb, ${createdAt}, ${createdAt}, ${createdAt})
+    `;
+    const admin = new OutboxAdminService({ prisma });
+
+    const first = await admin.listPage({ limit: 2 });
+    expect(first.records.map((record) => record.id)).toEqual(
+      expectedIds.slice(0, 2),
+    );
+    expect(first.nextCursor).toEqual(expect.any(String));
+
+    const second = await admin.listPage({
+      limit: 2,
+      cursor: first.nextCursor!,
+    });
+    expect(second.records.map((record) => record.id)).toEqual(
+      expectedIds.slice(2),
+    );
+    expect(second.nextCursor).toBeNull();
+
+    const observed = [...first.records, ...second.records].map(
+      (record) => record.id,
+    );
+    expect(observed).toEqual(expectedIds);
+    expect(new Set(observed).size).toBe(expectedIds.length);
+  });
+
   describe('admin retry flow', () => {
     let app: INestApplication;
     let emitter: OutboxEmitter;

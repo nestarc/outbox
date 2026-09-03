@@ -7,6 +7,7 @@ import type { OutboxHandler } from './interfaces/outbox-handler.interface';
 export class OutboxExplorer implements OnModuleInit {
   private readonly logger = new Logger(OutboxExplorer.name);
   private readonly handlers = new Map<string, OutboxHandler[]>();
+  private readonly discovered = new WeakMap<object, Map<string, Set<string>>>();
 
   constructor(
     private readonly discovery: DiscoveryService,
@@ -40,6 +41,7 @@ export class OutboxExplorer implements OnModuleInit {
         };
 
         for (const eventType of eventTypes) {
+          this.assertUniqueDiscovery(instance, methodName, eventType);
           const existing = this.handlers.get(eventType) ?? [];
           existing.push(handler);
           this.handlers.set(eventType, existing);
@@ -57,5 +59,28 @@ export class OutboxExplorer implements OnModuleInit {
 
   getRegisteredEventTypes(): string[] {
     return [...this.handlers.keys()];
+  }
+
+  private assertUniqueDiscovery(
+    instance: object,
+    methodName: string,
+    eventType: string,
+  ): void {
+    let methods = this.discovered.get(instance);
+    if (!methods) {
+      methods = new Map();
+      this.discovered.set(instance, methods);
+    }
+    let eventTypes = methods.get(methodName);
+    if (!eventTypes) {
+      eventTypes = new Set();
+      methods.set(methodName, eventTypes);
+    }
+    if (eventTypes.has(eventType)) {
+      throw new Error(
+        `Duplicate outbox handler discovery for ${instance.constructor.name}.${methodName} and "${eventType}"`,
+      );
+    }
+    eventTypes.add(eventType);
   }
 }

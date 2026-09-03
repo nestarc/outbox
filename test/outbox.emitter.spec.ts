@@ -22,6 +22,18 @@ class OrderPaidEvent extends OutboxEvent {
   }
 }
 
+class PayloadEvent extends OutboxEvent {
+  static readonly eventType = 'payload.test';
+
+  constructor(private readonly value: Record<string, unknown>) {
+    super();
+  }
+
+  override toPayload(): Record<string, unknown> {
+    return this.value;
+  }
+}
+
 function createMockTx() {
   return {
     $executeRaw: jest.fn().mockResolvedValue(1),
@@ -339,6 +351,132 @@ describe('OutboxEmitter', () => {
       );
     });
 
+    it('observes an attempted emit before a caller-owned transaction rolls back', async () => {
+      const observations: string[] = [];
+      const emitter = createEmitter({
+        hooks: {
+          onEmit: jest.fn(() => {
+            observations.push('onEmit');
+          }),
+        },
+      });
+      const tx = createMockTx();
+
+      await expect(
+        (async () => {
+          await emitter.emit(tx, new OrderCreatedEvent('order-rollback', 50));
+          throw new Error('caller rolled back');
+        })(),
+      ).rejects.toThrow('caller rolled back');
+
+      expect(observations).toEqual(['onEmit']);
+      expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+    });
+
+    it('gives onEmit a detached deep snapshot of caller-owned values', async () => {
+      const payload = { order: { id: 'order-1' } };
+      const headers = { source: 'api' };
+      const occurredAt = new Date('2026-01-02T03:04:05.000Z');
+      const emitter = createEmitter({
+        hooks: {
+          onEmit: jest.fn((context) => {
+            const mutable = context as unknown as {
+              payload: { order: { id: string } };
+              headers: { source: string };
+              occurredAt: Date;
+            };
+            mutable.payload.order.id = 'mutated';
+            mutable.headers.source = 'mutated';
+            mutable.occurredAt.setUTCFullYear(1999);
+          }),
+        },
+      });
+
+      await emitter.emit(createMockTx(), new PayloadEvent(payload), {
+        headers,
+        occurredAt,
+      });
+
+      expect(payload).toEqual({ order: { id: 'order-1' } });
+      expect(headers).toEqual({ source: 'api' });
+      expect(occurredAt.toISOString()).toBe('2026-01-02T03:04:05.000Z');
+    });
+
+    it.each([
+      ['BigInt', { value: 1n }],
+      ['Invalid Date', { value: new Date('invalid') }],
+      ['non-plain object', { value: new Map([['key', 'value']]) }],
+    ])(
+      'rejects %s payloads with a stable package error',
+      async (_, payload) => {
+        const emitter = createEmitter();
+        const tx = createMockTx();
+
+        await expect(
+          emitter.emit(tx, new PayloadEvent(payload)),
+        ).rejects.toMatchObject({
+          name: 'OutboxEnvelopeError',
+          code: 'OUTBOX_INVALID_ENVELOPE',
+          field: expect.stringMatching(/^payload/),
+        });
+        expect(tx.$executeRaw).not.toHaveBeenCalled();
+      },
+    );
+
+    it('rejects circular payloads before calling the database', async () => {
+      const payload: Record<string, unknown> = {};
+      payload.self = payload;
+      const emitter = createEmitter();
+      const tx = createMockTx();
+
+      await expect(
+        emitter.emit(tx, new PayloadEvent(payload)),
+      ).rejects.toMatchObject({
+        code: 'OUTBOX_INVALID_ENVELOPE',
+        reason: 'circular',
+      });
+      expect(tx.$executeRaw).not.toHaveBeenCalled();
+    });
+
+    it('rejects an invalid occurredAt instead of silently storing now', async () => {
+      const emitter = createEmitter();
+      const tx = createMockTx();
+
+      await expect(
+        emitter.emit(tx, new OrderPaidEvent('order-1'), {
+          occurredAt: new Date('invalid'),
+        }),
+      ).rejects.toMatchObject({
+        code: 'OUTBOX_INVALID_ENVELOPE',
+        field: 'occurredAt',
+        reason: 'invalid_date',
+      });
+      expect(tx.$executeRaw).not.toHaveBeenCalled();
+    });
+
+    it('rejects oversized payloads and metadata before calling the database', async () => {
+      const emitter = createEmitter();
+      const tx = createMockTx();
+
+      await expect(
+        emitter.emit(tx, new PayloadEvent({ data: 'x'.repeat(1024 * 1024) })),
+      ).rejects.toMatchObject({
+        code: 'OUTBOX_INVALID_ENVELOPE',
+        field: 'payload',
+        reason: 'too_large',
+      });
+      await expect(
+        emitter.emit(tx, new OrderPaidEvent('order-1'), {
+          correlationId: 'x'.repeat(256),
+        }),
+      ).rejects.toMatchObject({
+        code: 'OUTBOX_INVALID_ENVELOPE',
+        field: 'correlationId',
+        reason: 'too_long',
+      });
+      expect(tx.$executeRaw).not.toHaveBeenCalled();
+    });
+
     it('should send a PostgreSQL notification when wakeup is enabled', async () => {
       const emitter = createEmitter({
         wakeup: { enabled: true, channel: 'outbox_custom' },
@@ -431,6 +569,37 @@ describe('OutboxEmitter', () => {
       );
       expect(tx.$executeRawUnsafe).not.toHaveBeenCalled();
       expect(tx.$executeRaw).not.toHaveBeenCalled();
+    });
+
+    it('validates every entry before the fallback path inserts any row', async () => {
+      const emitter = createEmitter();
+      const tx = createMockTx();
+      tx.$executeRawUnsafe = undefined as never;
+      const circular: Record<string, unknown> = {};
+      circular.self = circular;
+
+      await expect(
+        emitter.emitMany(tx, [
+          new OrderPaidEvent('order-1'),
+          new PayloadEvent(circular),
+        ]),
+      ).rejects.toMatchObject({ code: 'OUTBOX_INVALID_ENVELOPE' });
+      expect(tx.$executeRaw).not.toHaveBeenCalled();
+    });
+
+    it('chunks bulk inserts below the PostgreSQL bind parameter limit', async () => {
+      const emitter = createEmitter();
+      const tx = createMockTx();
+      const events = Array.from(
+        { length: 1001 },
+        (_, index) => new OrderPaidEvent(`order-${index}`),
+      );
+
+      await emitter.emitMany(tx, events);
+
+      expect(tx.$executeRawUnsafe).toHaveBeenCalledTimes(2);
+      expect(tx.$executeRawUnsafe.mock.calls[0]).toHaveLength(1 + 1000 * 12);
+      expect(tx.$executeRawUnsafe.mock.calls[1]).toHaveLength(1 + 12);
     });
   });
 });

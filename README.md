@@ -232,7 +232,7 @@ CREATE TABLE IF NOT EXISTS outbox_events (
   )
 );
 
--- PENDING events: due-time eligibility with deterministic creation-time tie-break
+-- PENDING eligibility lookup; this is not a FIFO guarantee
 CREATE INDEX IF NOT EXISTS idx_outbox_pending
   ON outbox_events (next_attempt_at ASC NULLS FIRST, created_at ASC)
   WHERE status = 'PENDING';
@@ -255,6 +255,7 @@ CREATE INDEX IF NOT EXISTS idx_outbox_failed
   ON outbox_events (created_at DESC)
   WHERE status = 'FAILED';
 
+-- Aggregate lookup/replay support only; this is not a FIFO constraint
 CREATE INDEX IF NOT EXISTS idx_outbox_aggregate
   ON outbox_events (aggregate_type, aggregate_id, created_at ASC)
   WHERE aggregate_id IS NOT NULL;
@@ -362,7 +363,32 @@ await outbox.emitMany(tx, [
 ]);
 ```
 
-When the Prisma transaction client exposes `$executeRawUnsafe`, `emitMany()` uses a single parameterized multi-row insert.
+Producer input is validated before any database call:
+
+| Field                                                                         | Contract                                                                                                                                                                                                                                                                                             |
+| ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `eventType`, tenant/aggregate/partition/idempotency/correlation/causation ids | Canonical non-empty string with no leading/trailing whitespace, at most 255 characters. Optional metadata may be `null`/omitted; an empty string is rejected.                                                                                                                                        |
+| `payload`                                                                     | Plain JSON object only. Nested values may be finite numbers, strings, booleans, null, arrays, and plain objects. `BigInt`, `Date`, class/collection instances, functions, symbols, `undefined`, circular values, and nesting beyond 100 levels are rejected. UTF-8 serialized size is at most 1 MiB. |
+| `headers`                                                                     | Plain object with canonical non-empty keys up to 255 characters and string values up to 8,192 characters. Empty string values are allowed. Total UTF-8 serialized size is at most 64 KiB.                                                                                                            |
+| `occurredAt`                                                                  | A valid `Date`; invalid dates are rejected rather than becoming `null` or database time.                                                                                                                                                                                                             |
+
+Invalid input throws `OutboxEnvelopeError` with stable code
+`OUTBOX_INVALID_ENVELOPE`, plus `field` and `reason`, before SQL is called.
+The reason is one of `invalid_type`, `empty`, `too_long`, `invalid_date`,
+`unsupported_json_value`, `circular`, `too_deep`, or `too_large`.
+
+`emitMany()` validates the complete input before staging its first row. When
+the Prisma transaction client exposes `$executeRawUnsafe`, it inserts at most
+1,000 rows (12,000 bind values) per statement, staying below both PostgreSQL's
+65,535 bind limit and practical JavaScript variadic-call limits. Every chunk
+uses the same caller-owned transaction client; let an insert rejection escape
+the transaction callback so the transaction rolls back. The fallback path also
+prevalidates all entries, then inserts them through that same transaction.
+
+`@OnOutboxEvent()` rejects the same event type twice in one decorator, and
+discovery fails if the same provider instance, method, and event type is
+registered twice. Different handlers may intentionally subscribe to the same
+event type and still run as fan-out listeners.
 
 ## Admin and DLQ API
 
@@ -418,6 +444,7 @@ Available methods:
 
 - `getStats()`
 - `list(options?)`
+- `listPage(options?)`
 - `getById(id)`
 - `retry(id)`
 - `retryMany(ids)`
@@ -433,6 +460,30 @@ current time so it is explicitly due now. `markFailed()` only changes
 changing `retry_count`. `purgeSent()` only deletes `SENT` rows whose
 `processed_at` is before the requested cutoff. No admin mutation overwrites an
 active `PROCESSING` claim.
+
+`list()` remains the compatibility range API. It now has a deterministic
+display order of `created_at DESC, id DESC`; its `before`/`after` values are
+date filters, not continuation tokens, so using only a timestamp from the last
+record can still skip or repeat rows that share that timestamp. New code should
+use `listPage()`:
+
+```typescript
+const first = await operator.listPage({ status: 'FAILED', limit: 50 });
+const second = first.nextCursor
+  ? await operator.listPage({
+      status: 'FAILED',
+      limit: 50,
+      cursor: first.nextCursor,
+    })
+  : null;
+```
+
+`listPage()` orders by `(created_at DESC, id DESC)` and its versioned opaque
+cursor is an exclusive boundary over that tuple. Keep the same filters between
+pages. A malformed or unsupported cursor throws `OutboxCursorError` with stable
+code `OUTBOX_INVALID_CURSOR`. Tenant-scoped pages retain the fixed tenant SQL
+predicate. The cursor order is for deterministic admin traversal only and does
+not imply delivery FIFO.
 
 Single-record mutations return a discriminated result:
 
@@ -514,7 +565,26 @@ OutboxModule.forRoot({
 });
 ```
 
-Hook errors are logged and swallowed so observability failures do not alter delivery state.
+Hooks receive detached deep snapshots and readonly public context types.
+Mutating a snapshot does not change canonical delivery/state data or the values
+owned by the emitter caller. Runtime freezing is not promised. Hook errors and
+rejections are logged and swallowed so observability failures do not alter
+delivery state.
+
+| Observation                         | Exact meaning                                                                                                                                                                                                                                                             |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `onEmit`                            | The insert and optional `pg_notify` statements were staged successfully in the caller-owned transaction. It runs before that transaction commits, so a later caller error/rollback can leave an `onEmit` observation with no durable outbox row. It is not a commit hook. |
+| `onDispatchStart`                   | A live claim is about to attempt delivery. It can still find no local handler, fail, lose its lease, or be retried.                                                                                                                                                       |
+| `onDispatchSuccess`                 | Delivery returned successfully and the fenced `SENT` transition was stored. It is omitted when the claim was lost. In publisher mode this still does not mean a downstream consumer completed.                                                                            |
+| `onDispatchFailure`                 | Delivery threw and the fenced retry or terminal transition was stored.                                                                                                                                                                                                    |
+| `onRetryScheduled` / `onDeadLetter` | The corresponding persisted failure transition was stored.                                                                                                                                                                                                                |
+| No local handler                    | The row is marked `FAILED`; no success/failure/retry/dead-letter hook is emitted. `onDispatchStart` may already have observed the attempt.                                                                                                                                |
+| Hook throw/reject                   | Logged and swallowed; the delivery transition is unchanged.                                                                                                                                                                                                               |
+
+These callbacks are best-effort metrics/tracing observations, not a durable
+compliance audit. If an audit fact must commit atomically with a business write,
+write an audit row in that same transaction. If it must survive and be consumed
+later, emit a separate durable audit event with an idempotent consumer.
 
 ## PostgreSQL LISTEN/NOTIFY Wakeup
 
@@ -606,6 +676,13 @@ paths have **at-least-once** semantics.
 | `idempotency_key`         | Application metadata carried with the record. The package does not enforce uniqueness or deduplicate producers or consumers with it.                                                    |
 | `partition_key`           | Routing metadata for a custom publisher. It does not serialize claims or provide partition, aggregate, or global FIFO.                                                                  |
 | Ordering                  | Strict global, aggregate, and partition FIFO are not guaranteed. Retries, multiple pollers, and callback duration can change observation order.                                         |
+
+The claim query's `ORDER BY created_at`, an aggregate lookup index, and rows
+returned by `UPDATE ... RETURNING` do not create a serialization boundary.
+Events emitted in one transaction can share the same PostgreSQL timestamp;
+concurrent pollers may claim different eligible rows, and callback completion
+can invert claim order. Strict aggregate/partition FIFO remains a future
+`OUT-B01` design rather than a current package guarantee.
 
 Duplicates can occur in these windows:
 

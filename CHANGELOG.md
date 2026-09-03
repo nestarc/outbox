@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Admin APIs now expose `listPage()` with deterministic
+  `(created_at DESC, id DESC)` traversal, an exclusive opaque versioned cursor,
+  and `nextCursor`. Invalid cursors throw `OutboxCursorError` with stable code
+  `OUTBOX_INVALID_CURSOR`; the existing `list()` Date-filter API remains
+  available for compatibility.
+- Producer envelope failures now throw `OutboxEnvelopeError` with stable code
+  `OUTBOX_INVALID_ENVELOPE` and machine-readable `field`/`reason` details.
+
 ### Fixed
 
 - Release workflow authorization now permits real npm publication only for a
@@ -32,6 +42,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   single-flight coordinator. Concurrent triggers are coalesced into at most
   one queued rerun, background failures are logged without becoming unhandled
   rejections, and shutdown drops queued work while waiting for the active poll.
+- `emit()` and `emitMany()` now reject invalid dates, BigInt, circular or
+  non-plain JSON, unsupported JSON values, oversized payloads/headers, blank or
+  overlong identifiers, and invalid headers before calling the database.
+  `emitMany()` prevalidates the complete input and chunks inserts at 1,000 rows
+  on the same caller-owned transaction, below PostgreSQL and JavaScript
+  argument limits.
+- Duplicate event entries in one `@OnOutboxEvent()` and duplicate discovery of
+  the same provider instance/method/event tuple now fail fast, while distinct
+  handlers retain intentional fan-out.
 
 ### Changed
 
@@ -75,6 +94,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at-least-once, documents every known duplicate window, and clarifies that
   `idempotency_key`, `partition_key`, and Outbox `SENT` do not provide consumer
   deduplication, FIFO, or downstream-completion guarantees.
+- Hook contexts are readonly detached snapshots. The hook contract now states
+  that `onEmit` observes a staged attempt before caller transaction commit,
+  documents rollback/no-handler/hook-failure meaning, and directs durable
+  compliance audit facts to transactional rows or durable events.
+- Admin ordering is deterministic for traversal only. Equal transaction
+  timestamps, `UPDATE ... RETURNING`, aggregate indexes, concurrent claims,
+  retries, and callback duration do not provide global, aggregate, or partition
+  FIFO; strict FIFO remains deferred to `OUT-B01`.
 - Pollers now claim one record on demand and protect its active callback with a
   renewable PostgreSQL lease. Recovery only requeues expired leases, does not
   consume retry budget, and stale completions require both the original claim
@@ -116,6 +143,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transport mismatches, and corrupt persisted rows. PostgreSQL E2E verifies the
   new retry, JSON-object, and non-processing-claim CHECK constraints and their
   idempotent upgrade.
+- Unit contracts cover hook rollback/mutation isolation, stable envelope
+  failures, full-batch prevalidation, bulk chunking, duplicate discovery, and
+  cursor decoding. PostgreSQL E2E traverses rows with an identical
+  `created_at` without gaps or duplicates.
 - PostgreSQL E2E now gates concurrent two-poller initial claims, active lease
   heartbeats, expired-lease recovery, stale completions, publisher acceptance
   before `SENT` process loss, and notification/poll fallback coalescing. The
@@ -139,6 +170,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   affect consumers, and the admin single-record mutation result changed from a
   boolean to a discriminated union, this change is targeted at the next
   pre-1.0 minor release rather than a patch release.
+- The additive cursor API/errors and stricter producer envelope validation are
+  also targeted at the next pre-1.0 minor release. Existing Date filters are
+  source-compatible but remain range filters rather than pagination cursors.
 - Raising the Node engine floor and removing Node 20 are also intentionally
   targeted at that next pre-1.0 minor release. Node 20 consumers must move to
   Node 22 or remain on the 0.2.x release line.

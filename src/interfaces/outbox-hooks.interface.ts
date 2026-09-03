@@ -1,22 +1,22 @@
 import type { OutboxRecord } from './outbox-record.interface';
 
 export interface OutboxEmitContext {
-  eventType: string;
-  payload: Record<string, unknown>;
-  tenantId: string | null;
-  aggregateType: string | null;
-  aggregateId: string | null;
-  partitionKey: string | null;
-  idempotencyKey: string | null;
-  correlationId: string | null;
-  causationId: string | null;
-  headers: Record<string, string>;
-  occurredAt: Date | null;
+  readonly eventType: string;
+  readonly payload: Readonly<Record<string, unknown>>;
+  readonly tenantId: string | null;
+  readonly aggregateType: string | null;
+  readonly aggregateId: string | null;
+  readonly partitionKey: string | null;
+  readonly idempotencyKey: string | null;
+  readonly correlationId: string | null;
+  readonly causationId: string | null;
+  readonly headers: Readonly<Record<string, string>>;
+  readonly occurredAt: Date | null;
 }
 
 export interface OutboxPollContext {
-  batchSize: number;
-  deliveryMode: 'local' | 'publisher';
+  readonly batchSize: number;
+  readonly deliveryMode: 'local' | 'publisher';
 }
 
 export interface OutboxDispatchContext {

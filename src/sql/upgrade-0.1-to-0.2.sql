@@ -25,6 +25,7 @@ CREATE INDEX IF NOT EXISTS idx_outbox_pending
   ON outbox_events (next_attempt_at ASC NULLS FIRST, created_at ASC)
   WHERE status = 'PENDING';
 
+-- Aggregate lookup/replay support only; this is not a FIFO constraint.
 CREATE INDEX IF NOT EXISTS idx_outbox_aggregate
   ON outbox_events (aggregate_type, aggregate_id, created_at ASC)
   WHERE aggregate_id IS NOT NULL;

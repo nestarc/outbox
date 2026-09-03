@@ -185,10 +185,10 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 |   14 | `OUT-M13`      | P1       | `DONE`     | M    | 없음                                                                                 | Prisma 5 지원 선언 증거 복구                                        |
 |   15 | `OUT-M14`      | P1       | `DONE`     | M    | 없음                                                                                 | Node LTS/Nest 12 현재 지원 정책                                     |
 |   16 | `OUT-M21`      | P1       | `BLOCKED`  | M    | `OUT-M12`                                                                            | pack-once, exact artifact publish/provenance                        |
-|   17 | `OUT-M15`      | P2       | `READY`    | S    | `OUT-M01`                                                                            | hook의 불변성·commit 의미 문서화                                    |
-|   18 | `OUT-M16`      | P2       | `READY`    | M    | 없음                                                                                 | envelope·JSON·bulk 입력 계약                                        |
-|   19 | `OUT-M17`      | P2       | `READY`    | S    | 없음                                                                                 | ordering 비보장과 deterministic cursor 계약                         |
-|   20 | `OUT-M18`      | P2       | `BLOCKED`  | M    | `OUT-M05`, `OUT-M07–08`, `OUT-M17`                                                   | admin pagination/retention/bulk 성능                                |
+|   17 | `OUT-M15`      | P2       | `DONE`     | S    | `OUT-M01`                                                                            | hook의 불변성·commit 의미 문서화                                    |
+|   18 | `OUT-M16`      | P2       | `DONE`     | M    | 없음                                                                                 | envelope·JSON·bulk 입력 계약                                        |
+|   19 | `OUT-M17`      | P2       | `DONE`     | S    | 없음                                                                                 | ordering 비보장과 deterministic cursor 계약                         |
+|   20 | `OUT-M18`      | P2       | `READY`    | M    | `OUT-M05`, `OUT-M07–08`, `OUT-M17`                                                   | admin pagination/retention/bulk 성능                                |
 |   21 | `OUT-M19`      | P2       | `BLOCKED`  | L    | `OUT-M01–02`, `OUT-M05`, `OUT-M10`                                                   | schema upgrade/diagnostic compatibility                             |
 |  22A | `OUT-M20A`     | P2       | `BLOCKED`  | M    | `OUT-M01`, `OUT-M05–06`, `OUT-M10`                                                   | publisher terminal/tenant-context PostgreSQL E2E                    |
 |  22B | `OUT-M20B`     | P2       | `READY`    | M    | `OUT-M03`, `OUT-M09`                                                                 | LISTEN/NOTIFY wakeup/fallback PostgreSQL E2E                        |
@@ -513,28 +513,37 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 
 ### `OUT-M15` — hook 불변성과 commit 의미
 
-- `onEmit`은 caller transaction commit 전의 staged/attempted 관측임을 명시한다.
-- `onDispatchStart` 등 observer는 delivery/state를 바꿀 수 없는 snapshot을 받는다.
-- rollback된 emit, no-handler failure, hook throw/reject의 관측 의미를 표로 고정한다.
-- durable compliance audit가 필요하면 같은 transaction의 audit row/별도 durable event를 사용하도록 안내한다.
+- 상태: `P2 / DONE`
+- [x] `onEmit`은 caller transaction commit 전의 staged/attempted 관측임을 명시한다.
+- [x] `onDispatchStart` 등 observer는 delivery/state를 바꿀 수 없는 snapshot을 받는다.
+- [x] rollback된 emit, no-handler failure, hook throw/reject의 관측 의미를 표로 고정한다.
+- [x] durable compliance audit가 필요하면 같은 transaction의 audit row/별도 durable event를 사용하도록 안내한다.
+
+검증: 프로필 A/D/F. readonly hook type과 detached snapshot은 additive/tightening 변화이므로 누적 작업과 같은 next pre-1.0 minor(기본 0.3.0) 대상으로 결정했다.
 
 ### `OUT-M16` — envelope·JSON·bulk 입력 계약
 
-- event/tenant/aggregate/partition/correlation/header 길이와 빈 값 정책을 정의한다.
-- Invalid Date, BigInt, circular/non-plain JSON, oversized payload를 DB 호출 전에 stable error로 거부한다.
-- `emitMany`는 PostgreSQL bind 한계 안에서 transaction-preserving chunk 또는 documented maximum을 사용한다.
-- 같은 decorator 안의 duplicate event entry와 동일 `(instance, method, eventType)` 중복 discovery만 fail-fast한다. 서로 다른 handler의 의도된 동일 event fan-out은 보존한다.
+- 상태: `P2 / DONE`
+- [x] event/tenant/aggregate/partition/correlation/header 길이와 빈 값 정책을 정의한다.
+- [x] Invalid Date, BigInt, circular/non-plain JSON, oversized payload를 DB 호출 전에 stable error로 거부한다.
+- [x] `emitMany`는 PostgreSQL bind 한계 안에서 transaction-preserving chunk 또는 documented maximum을 사용한다.
+- [x] 같은 decorator 안의 duplicate event entry와 동일 `(instance, method, eventType)` 중복 discovery만 fail-fast한다. 서로 다른 handler의 의도된 동일 event fan-out은 보존한다.
+
+검증: 프로필 A/B/D/F. `OutboxEnvelopeError(OUTBOX_INVALID_ENVELOPE)`와 stricter producer validation은 additive API지만 이전에 DB/native JSON 오류로 늦게 실패하던 입력을 조기에 거부하므로 next pre-1.0 minor(기본 0.3.0) 대상으로 결정했다.
 
 ### `OUT-M17` — ordering 비보장과 deterministic cursor
 
-- UPDATE RETURNING/동일 transaction timestamp가 FIFO를 만들지 않는다고 문서화한다.
-- SQL의 “per-aggregate ordering” 오해 주석을 수정한다.
-- admin list는 `(created_at,id)`의 정렬 방향과 exclusive boundary를 고정하고 opaque versioned cursor와 `nextCursor`를 제공한다. 기존 Date filter의 호환 경로와 semver를 명시한다.
-- strict aggregate/partition FIFO는 `OUT-B01`로 남긴다.
+- 상태: `P2 / DONE`
+- [x] UPDATE RETURNING/동일 transaction timestamp가 FIFO를 만들지 않는다고 문서화한다.
+- [x] SQL의 “per-aggregate ordering” 오해 주석을 수정한다.
+- [x] admin list는 `(created_at,id)`의 정렬 방향과 exclusive boundary를 고정하고 opaque versioned cursor와 `nextCursor`를 제공한다. 기존 Date filter의 호환 경로와 semver를 명시한다.
+- [x] strict aggregate/partition FIFO는 `OUT-B01`로 남긴다.
+
+검증: 프로필 A/B/D/F. 기존 `list()`와 Date range filter는 유지하고 deterministic tie-break만 추가했으며 새 `listPage()`/cursor error는 additive다. 누적 작업과 같은 next pre-1.0 minor(기본 0.3.0) 대상으로 결정했다.
 
 ### `OUT-M18` — admin pagination, retention, bulk performance
 
-- 선행: `OUT-M05`, `OUT-M07–08`, `OUT-M17`.
+- 상태: `P2 / READY`; 선행 `OUT-M05`, `OUT-M07–08`, `OUT-M17` 완료.
 - stable cursor와 tenant predicate를 결합한다.
 - `retryMany` bind-limit chunking과 partial failure 의미를 정한다.
 - global stats/full-history count, purge/retention index는 `EXPLAIN ANALYZE` 증거 뒤 추가한다.
@@ -758,6 +767,9 @@ Outbox ── durable record / publisher callback ──> Jobs adapter ──> J
 | 2026-09-03 | `OUT-M13`   | `DONE`     | local main `13bfb8c` working tree                | exact packed Prisma 5.22.0/6.19.3 + preserved 7.10.0 PostgreSQL consumers PASS                  | 원격 Node 22 CI lane 확인 후 release 선행 작업 계속                    |
 | 2026-09-03 | `OUT-M14`   | `DONE`     | local main `5a032e3` working tree                | Node 22/24 exact Nest 12/Schedule 12 packed PostgreSQL consumers; unit/E2E/policy/audit PASS    | 변경 review 후 commit/push/PR하고 원격 Node 22/24 matrix 확인          |
 | 2026-09-03 | `OUT-M21`   | `BLOCKED`  | local main `7650295` working tree                | pack-once 117 files/55,692 B; exact Nest 10/11/12 + Prisma 5/6/7 consumer; policy 19 refs PASS  | `OUT-M12` 완료 후 manual run과 next tag publish/attestation/rerun 증거 |
+| 2026-09-03 | `OUT-M15`   | `DONE`     | local main `2c83fa1` working tree                | hook rollback/mutation/error contract; unit 188, E2E 28, packed Prisma 7 consumer PASS          | 변경 review 후 OUT-M15–17을 함께 commit/push/PR                        |
+| 2026-09-03 | `OUT-M16`   | `DONE`     | local main `2c83fa1` working tree                | stable envelope error, 1,000-row chunk, duplicate discovery; source/DB/packed PASS              | 변경 review 후 OUT-M15–17을 함께 commit/push/PR                        |
+| 2026-09-03 | `OUT-M17`   | `DONE`     | local main `2c83fa1` working tree                | `(created_at,id)` cursor unit + identical timestamp PostgreSQL E2E PASS                         | 선행이 해소된 `OUT-M18`을 `READY`로 전환                               |
 
 ### `OUT-M01` 종료 인계
 
@@ -997,4 +1009,49 @@ Unverified paths and reason: 새 workflow의 GitHub-hosted Node 22/24 artifact u
 External PR, run, release evidence: docs/reports/2026-09-03-out-m21-pack-once.md에 graph, artifact contract, local/public registry evidence, 정확한 remote 후속 작업을 기록했다. commit/push/PR/release는 수행하지 않았다.
 Remaining risk: OUT-M12가 끝나기 전에는 tag 이동/환경 우회 차단을 workflow만으로 보장할 수 없다. registry propagation이나 npm signature service 장애는 publish 후 verification을 fail-closed시키며 운영자가 같은 immutable tag run을 재실행해야 한다.
 Next exact action: 변경을 review/commit/push한 뒤 OUT-M12 관리자 설정을 완료하고 workflow_dispatch dry-run을 기록한다. 다음 immutable release tag에서 exact artifact digest와 npm attestation 검증을 기록한 뒤 같은 tag workflow를 재실행해 identical-byte skip을 확인하고 OUT-M21을 DONE으로 바꾼다.
+```
+
+### `OUT-M15` 종료 인계
+
+```text
+Task: OUT-M15
+State: DONE
+Start ref / end ref: local main@2c83fa1fa8a166cbcfef348c0a5539308ad002f1 / local working tree (uncommitted)
+Changed files: readonly emit/poll hook context와 detached onEmit snapshot, rollback/mutation unit contracts, README hook observation 표와 durable audit guidance, CHANGELOG, maintenance plan
+Contract / semver decision: onEmit은 insert와 optional pg_notify가 caller-owned transaction에 staged된 뒤 commit 전에 실행되는 attempted observation이며 commit hook이 아니다. 모든 hook은 best-effort snapshot observer이고 throw/reject는 delivery state를 바꾸지 않는다. compliance fact는 같은 transaction의 audit row 또는 별도 durable event로 기록한다. readonly public type tightening은 누적 변경과 같은 next pre-1.0 minor(기본 0.3.0) 대상으로 결정했다.
+Commands and exact results: 첫 focused RED에서 rollback/mutation 계약은 구현 전 상태였고 새 cursor/type 테스트와 함께 4 suites FAIL; 최종 unit 9 suites/188 tests PASS; lint PASS; build typecheck/build PASS; PostgreSQL E2E 1 suite/28 tests PASS; strict packed Nest 11.2.1/Prisma 7.10.0 install/typecheck/build/PostgreSQL smoke PASS (sha512-tuxGr85EzAUuPRtBRhVFKFLCZI4gHV9uUk39IJ0WOlSlByLVz01RJ6TsUkDsAPRJpPlJgXQ6NUM4F1qKcDAlKg==); scoped Prettier와 git diff --check PASS
+Unverified paths and reason: 원격 GitHub Actions는 push 전이라 미실행이다. caller transaction의 실제 rollback은 기존 PostgreSQL E2E가 durable row 부재를 검증하고 새 unit은 onEmit이 rollback 결정 전에 이미 관측됨을 고정한다.
+External PR, run, release evidence: 없음. disposable compose project outbox-out-m15-m17-20260903과 branch-local packed tarball로 검증했으며 commit/push/PR/release는 수행하지 않았다.
+Remaining risk: hook sink 자체의 durability/ordering은 package가 보장하지 않는다. runtime object freeze도 보장하지 않으며 snapshot mutation 격리만 보장한다.
+Next exact action: OUT-M15–17 변경을 함께 review한 뒤 path-scoped commit/push/PR한다.
+```
+
+### `OUT-M16` 종료 인계
+
+```text
+Task: OUT-M16
+State: DONE
+Start ref / end ref: local main@2c83fa1fa8a166cbcfef348c0a5539308ad002f1 / local working tree (uncommitted)
+Changed files: typed envelope error/export, producer identifier/JSON/header/date/size validation, emitMany full prevalidation과 1,000-row transaction-preserving chunks, duplicate decorator/discovery guard, unit tests, README/CHANGELOG, maintenance plan
+Contract / semver decision: DB VARCHAR와 맞춘 identifier 최대 255자, payload plain JSON object/1 MiB/100 levels, headers canonical key 255자/string value 8,192자/64 KiB, valid occurredAt을 SQL 전에 검증한다. 실패는 OUTBOX_INVALID_ENVELOPE의 field/reason으로 고정한다. emitMany는 12 bind/row를 같은 caller transaction에서 1,000행씩 실행한다. 서로 다른 handler의 event fan-out은 유지한다. additive error API지만 이전 허용 입력을 조기 거부하는 stricter contract라 next pre-1.0 minor(기본 0.3.0) 대상으로 결정했다.
+Commands and exact results: 첫 focused RED는 duplicate decorator/discovery가 throw하지 않고 listPage가 없으며 envelope test가 새 contract type에서 실패함을 확인; 5,000-row 첫 구현은 60,000 variadic args에서 Node RangeError를 재현해 1,000-row로 안전하게 낮춤; 최종 unit 9 suites/188 tests PASS; PostgreSQL E2E 28 PASS; packed Prisma 7 consumer PASS (동일 SRI); lint/typecheck/build/Prettier/git diff --check PASS
+Unverified paths and reason: production 규모 payload를 DB에 넣는 성능 benchmark는 OUT-M27 범위이며, 원격 CI는 push 전이라 미실행이다.
+External PR, run, release evidence: 없음. local disposable PostgreSQL 16과 packed consumer를 사용했다.
+Remaining risk: caller가 chunk 중 DB 오류를 transaction callback 안에서 삼키고 commit하면 일반 transaction 사용 규칙과 마찬가지로 partial staging을 스스로 허용한다. 문서는 rejection을 transaction 밖으로 전파하도록 명시한다.
+Next exact action: OUT-M15–17 변경을 함께 review한 뒤 path-scoped commit/push/PR한다.
+```
+
+### `OUT-M17` 종료 인계
+
+```text
+Task: OUT-M17
+State: DONE
+Start ref / end ref: local main@2c83fa1fa8a166cbcfef348c0a5539308ad002f1 / local working tree (uncommitted)
+Changed files: additive admin page/cursor types와 typed cursor error/export, deterministic list/listPage SQL, unit 및 identical-timestamp PostgreSQL cursor test, SQL index comments, README ordering/cursor contract, CHANGELOG, maintenance plan
+Contract / semver decision: 기존 list(options)와 before/after Date range는 유지하고 ORDER BY created_at DESC, id DESC tie-break를 추가한다. 새 listPage는 같은 tuple의 exclusive opaque v1 cursor와 nextCursor를 제공하며 malformed/version/order mismatch는 OUTBOX_INVALID_CURSOR다. 이 순서는 admin traversal 전용이고 delivery FIFO가 아니다. additive API라 누적 변경과 같은 next pre-1.0 minor(기본 0.3.0) 대상으로 결정했다.
+Commands and exact results: 첫 RED는 listPage 부재로 TypeScript 실패; focused unit 구현 후 4 suites/81 tests PASS; full unit 188 PASS; PostgreSQL E2E 28 PASS(동일 created_at 3행을 2+1 페이지로 누락/중복 없이 순회); packed Prisma 7 consumer PASS (동일 SRI); lint/typecheck/build/Prettier/git diff --check PASS
+Unverified paths and reason: 대량 page EXPLAIN ANALYZE와 cursor/tenant 복합 index 결정은 선행이 해소된 OUT-M18 범위다. 원격 CI는 push 전이라 미실행이다.
+External PR, run, release evidence: 없음. local disposable PostgreSQL 16에서 실제 tuple boundary를 검증했다.
+Remaining risk: 페이지 사이 concurrent insert/delete는 snapshot isolation을 제공하지 않는다. cursor는 stable exclusive boundary이지 multi-page transaction snapshot이 아니다. strict aggregate/partition FIFO는 OUT-B01 backlog다.
+Next exact action: OUT-M18을 READY로 전환했다. OUT-M15–17 변경 review/commit/push/PR 뒤 OUT-M18 성능/retention scope를 시작한다.
 ```

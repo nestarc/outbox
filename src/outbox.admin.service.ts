@@ -3,6 +3,7 @@ import { OUTBOX_OPTIONS } from './outbox.constants';
 import type {
   OutboxHealth,
   OutboxHealthOptions,
+  OutboxListPage,
   OutboxListOptions,
   OutboxAdminMutationResult,
   OutboxStats,
@@ -11,6 +12,7 @@ import type {
 import type { OutboxOptions } from './interfaces/outbox-options.interface';
 import { parsePersistedOutboxRecord } from './outbox-invariants';
 import type { OutboxRecord } from './interfaces/outbox-record.interface';
+import { OutboxCursorError } from './errors/outbox-cursor.error';
 
 const DEFAULT_ADMIN_LIMIT = 50;
 const MAX_ADMIN_LIMIT = 500;
@@ -46,6 +48,16 @@ type OutboxStatsRow = {
   oldest_pending_age_ms: number | bigint | string | null;
   oldest_processing_age_ms: number | bigint | string | null;
 };
+
+type AdminCursorV1 = {
+  v: 1;
+  createdAt: string;
+  id: string;
+  order: 'created_at_desc_id_desc';
+};
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 abstract class OutboxAdminBase<TListOptions extends OutboxListOptions> {
   protected constructor(
@@ -142,13 +154,87 @@ abstract class OutboxAdminBase<TListOptions extends OutboxListOptions> {
         SELECT ${RECORD_SELECT}
         FROM outbox_events
         ${whereSql}
-        ORDER BY created_at DESC
+        ORDER BY created_at DESC, id DESC
         LIMIT $${values.length}
       `,
       ...values,
     );
 
     return rows.map((row) => this.mapRecord(row));
+  }
+
+  /**
+   * Deterministic descending pagination. The cursor is an opaque, versioned,
+   * exclusive boundary over `(created_at, id)`.
+   */
+  async listPage(
+    options: TListOptions & { cursor?: string } = {} as TListOptions,
+  ): Promise<OutboxListPage> {
+    const values: unknown[] = [];
+    const where: string[] = [];
+
+    if (this.expectedTenantId) {
+      values.push(this.expectedTenantId);
+      where.push(`tenant_id = $${values.length}`);
+    }
+
+    if (options.status) {
+      values.push(options.status);
+      where.push(`status = $${values.length}`);
+    }
+
+    if (options.eventType) {
+      values.push(options.eventType);
+      where.push(`event_type = $${values.length}`);
+    }
+
+    if (!this.expectedTenantId && options.tenantId) {
+      values.push(options.tenantId);
+      where.push(`tenant_id = $${values.length}`);
+    }
+
+    if (options.after) {
+      values.push(options.after);
+      where.push(`created_at >= $${values.length}`);
+    }
+
+    if (options.before) {
+      values.push(options.before);
+      where.push(`created_at < $${values.length}`);
+    }
+
+    if (options.cursor !== undefined) {
+      const cursor = this.decodeCursor(options.cursor);
+      values.push(cursor.createdAt);
+      const createdAtIndex = values.length;
+      values.push(cursor.id);
+      const idIndex = values.length;
+      where.push(`(created_at, id) < ($${createdAtIndex}, $${idIndex}::uuid)`);
+    }
+
+    const limit = this.normalizeLimit(options.limit);
+    values.push(limit + 1);
+
+    const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+    const rows = await this.queryRawUnsafe<Record<string, unknown>[]>(
+      `
+        SELECT ${RECORD_SELECT}
+        FROM outbox_events
+        ${whereSql}
+        ORDER BY created_at DESC, id DESC
+        LIMIT $${values.length}
+      `,
+      ...values,
+    );
+
+    const hasNextPage = rows.length > limit;
+    const records = rows.slice(0, limit).map((row) => this.mapRecord(row));
+    const boundary = records.at(-1);
+
+    return {
+      records,
+      nextCursor: hasNextPage && boundary ? this.encodeCursor(boundary) : null,
+    };
   }
 
   async getById(id: string): Promise<OutboxRecord | null> {
@@ -404,6 +490,52 @@ abstract class OutboxAdminBase<TListOptions extends OutboxListOptions> {
 
   private mapRecord(row: Record<string, unknown>): OutboxRecord {
     return parsePersistedOutboxRecord(row);
+  }
+
+  private encodeCursor(record: OutboxRecord): string {
+    const cursor: AdminCursorV1 = {
+      v: 1,
+      createdAt: record.createdAt.toISOString(),
+      id: record.id,
+      order: 'created_at_desc_id_desc',
+    };
+    return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
+  }
+
+  private decodeCursor(cursor: string): { createdAt: Date; id: string } {
+    try {
+      if (cursor.length === 0 || /\s/.test(cursor)) {
+        throw new Error('empty cursor');
+      }
+      const bytes = Buffer.from(cursor, 'base64url');
+      if (bytes.toString('base64url') !== cursor) {
+        throw new Error('non-canonical cursor');
+      }
+      const parsed: unknown = JSON.parse(bytes.toString('utf8'));
+      if (
+        parsed === null ||
+        typeof parsed !== 'object' ||
+        (parsed as Partial<AdminCursorV1>).v !== 1 ||
+        (parsed as Partial<AdminCursorV1>).order !==
+          'created_at_desc_id_desc' ||
+        typeof (parsed as Partial<AdminCursorV1>).createdAt !== 'string' ||
+        typeof (parsed as Partial<AdminCursorV1>).id !== 'string' ||
+        !UUID_PATTERN.test((parsed as AdminCursorV1).id)
+      ) {
+        throw new Error('invalid cursor shape');
+      }
+      const createdAt = new Date((parsed as AdminCursorV1).createdAt);
+      if (
+        !Number.isFinite(createdAt.getTime()) ||
+        createdAt.toISOString() !== (parsed as AdminCursorV1).createdAt
+      ) {
+        throw new Error('invalid cursor date');
+      }
+      return { createdAt, id: (parsed as AdminCursorV1).id };
+    } catch (error) {
+      if (error instanceof OutboxCursorError) throw error;
+      throw new OutboxCursorError();
+    }
   }
 
   private mapMutationResult(row: {

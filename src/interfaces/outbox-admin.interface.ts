@@ -20,6 +20,18 @@ export interface OutboxListOptions {
 
 export type OutboxTenantListOptions = Omit<OutboxListOptions, 'tenantId'>;
 
+export interface OutboxPageOptions extends OutboxListOptions {
+  /** Opaque exclusive continuation cursor returned by a previous page. */
+  cursor?: string;
+}
+
+export type OutboxTenantPageOptions = Omit<OutboxPageOptions, 'tenantId'>;
+
+export interface OutboxListPage {
+  records: OutboxRecord[];
+  nextCursor: string | null;
+}
+
 export interface OutboxHealthOptions {
   maxOldestPendingAgeMs?: number;
   maxFailedCount?: number;

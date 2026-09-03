@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS outbox_events (
   )
 );
 
--- PENDING events: due-time eligibility with deterministic creation-time tie-break
+-- PENDING eligibility lookup. created_at is a preference, not a FIFO guarantee;
+-- concurrent claimers, retries, and equal timestamps can change delivery order.
 CREATE INDEX IF NOT EXISTS idx_outbox_pending
   ON outbox_events (next_attempt_at ASC NULLS FIRST, created_at ASC)
   WHERE status = 'PENDING';
@@ -58,7 +59,8 @@ CREATE INDEX IF NOT EXISTS idx_outbox_failed
   ON outbox_events (created_at DESC)
   WHERE status = 'FAILED';
 
--- Aggregate replay and per-aggregate ordering
+-- Aggregate lookup/replay support only. This index does not serialize claims
+-- or guarantee aggregate, partition, or global FIFO.
 CREATE INDEX IF NOT EXISTS idx_outbox_aggregate
   ON outbox_events (aggregate_type, aggregate_id, created_at ASC)
   WHERE aggregate_id IS NOT NULL;
