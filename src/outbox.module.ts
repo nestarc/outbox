@@ -28,6 +28,7 @@ import type {
 } from './interfaces/outbox-options.interface';
 import type { OutboxTenantProvider } from './interfaces/outbox-tenancy.interface';
 import { validateOutboxOptions } from './outbox-invariants';
+import { OutboxSchemaGuard } from './outbox.schema';
 
 @Module({})
 export class OutboxModule {
@@ -66,6 +67,7 @@ export class OutboxModule {
         tenantProvider,
         OutboxOperatorService,
         OutboxTenantAdminService,
+        OutboxSchemaGuard,
         OutboxEmitter,
         OutboxPoller,
         OutboxListener,
@@ -105,6 +107,7 @@ export class OutboxModule {
         tenantProvider,
         OutboxOperatorService,
         OutboxTenantAdminService,
+        OutboxSchemaGuard,
         OutboxEmitter,
         OutboxPoller,
         OutboxListener,

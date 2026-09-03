@@ -56,8 +56,35 @@ CREATE INDEX IF NOT EXISTS idx_outbox_processing_lease_expiry
 
 -- FAILED events: admin/monitoring queries
 CREATE INDEX IF NOT EXISTS idx_outbox_failed
-  ON outbox_events (created_at DESC)
+  ON outbox_events (created_at DESC, id DESC)
   WHERE status = 'FAILED';
+
+-- Deterministic operator traversal over the stable admin cursor tuple.
+CREATE INDEX IF NOT EXISTS idx_outbox_admin_created
+  ON outbox_events (created_at DESC, id DESC);
+
+-- Tenant-scoped cursor traversal and exact per-status counts.
+CREATE INDEX IF NOT EXISTS idx_outbox_tenant_admin
+  ON outbox_events (tenant_id, created_at DESC, id DESC)
+  WHERE tenant_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_outbox_tenant_status_admin
+  ON outbox_events (tenant_id, status, created_at DESC, id DESC)
+  WHERE tenant_id IS NOT NULL;
+
+-- Tenant-scoped PROCESSING age checks use updated_at rather than created_at.
+CREATE INDEX IF NOT EXISTS idx_outbox_tenant_processing
+  ON outbox_events (tenant_id, updated_at ASC)
+  WHERE status = 'PROCESSING' AND tenant_id IS NOT NULL;
+
+-- SENT retention scans and bounded deletion candidates.
+CREATE INDEX IF NOT EXISTS idx_outbox_sent_retention
+  ON outbox_events (processed_at ASC, id ASC)
+  WHERE status = 'SENT';
+
+CREATE INDEX IF NOT EXISTS idx_outbox_tenant_sent_retention
+  ON outbox_events (tenant_id, processed_at ASC, id ASC)
+  WHERE status = 'SENT' AND tenant_id IS NOT NULL;
 
 -- Aggregate lookup/replay support only. This index does not serialize claims
 -- or guarantee aggregate, partition, or global FIFO.

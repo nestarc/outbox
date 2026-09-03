@@ -2,6 +2,7 @@ import {
   Inject,
   Injectable,
   Logger,
+  Optional,
   type OnApplicationShutdown,
   type OnModuleInit,
 } from '@nestjs/common';
@@ -11,6 +12,7 @@ import { OutboxWakeupUnavailableError } from './errors/outbox-wakeup-unavailable
 import type { OutboxOptions } from './interfaces/outbox-options.interface';
 import type { OutboxNotificationClient } from './interfaces/outbox-wakeup.interface';
 import { OutboxPoller } from './outbox.poller';
+import { OutboxSchemaGuard } from './outbox.schema';
 
 const DEFAULT_WAKEUP_CHANNEL = 'outbox_events';
 const DEFAULT_RECONNECT_DELAY = 5_000;
@@ -48,9 +50,11 @@ export class OutboxListener implements OnModuleInit, OnApplicationShutdown {
     @Inject(OUTBOX_OPTIONS) private readonly options: OutboxOptions,
     @Inject(OutboxPoller)
     private readonly poller: Pick<OutboxPoller, 'requestPoll'>,
+    @Optional() private readonly schemaGuard?: OutboxSchemaGuard,
   ) {}
 
   async onModuleInit(): Promise<void> {
+    if (this.schemaGuard) await this.schemaGuard.assertCompatible();
     if (!this.options.wakeup?.enabled) {
       if (this.options.polling?.enabled === false) {
         throw new OutboxWakeupUnavailableError(

@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Runtime startup now validates the required outbox columns, indexes, and
+  constraints and throws `OutboxSchemaError` with stable code
+  `OUTBOX_SCHEMA_MISMATCH`, required/actual versions, and missing objects before
+  poller SQL can fail generically. A unified shipped
+  `src/sql/upgrade-to-current.sql` upgrades exact v0.1.0 and v0.2.1 fixtures
+  idempotently.
 - Admin APIs now expose `listPage()` with deterministic
   `(created_at DESC, id DESC)` traversal, an exclusive opaque versioned cursor,
   and `nextCursor`. Invalid cursors throw `OutboxCursorError` with stable code
@@ -18,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `retryMany()` now deduplicates ids and uses 10,000-id statements instead of
+  risking PostgreSQL's bind limit. Admin cursor, tenant/status, processing-age,
+  and `SENT` retention paths have purpose-built indexes, while exact stats use
+  status-specific aggregates instead of one monolithic history aggregate.
 - Release workflow authorization now permits real npm publication only for a
   matching `v*.*.*` tag whose commit is on `main`. Manual dispatch is dry-run
   only; npm OIDC and GitHub `contents: write` live in separate jobs, and every
@@ -155,14 +165,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Migration
 
-- Existing 0.2.x databases must apply
-  `src/sql/upgrade-add-claim-token.sql`, `src/sql/upgrade-add-lease.sql`, and
-  `src/sql/upgrade-add-next-attempt-at.sql`, followed by
-  `src/sql/upgrade-add-invariants.sql`, before deploying this runtime. The
+- Existing 0.1.x and 0.2.x databases must drain old pollers and apply the
+  unified `src/sql/upgrade-to-current.sql` before deploying this runtime. The
   additive nullable columns and partial indexes are safe to apply more than
-  once. The invariant upgrade is idempotent but validates the existing table
-  and intentionally fails on corrupt rows. The retry upgrade makes existing pending/processing retries due at
-  migration time and rebuilds the pending index around `next_attempt_at`.
+  once. The unified upgrade is idempotent but validates the existing table and
+  intentionally fails on corrupt rows. It makes existing pending/processing
+  retries due at migration time and rebuilds the pending index around
+  `next_attempt_at`.
   Legacy `PROCESSING` rows with a null lease retain the configured duration as
   their recovery threshold. Drain 0.2.x pollers before starting the new runtime
   because older pollers neither heartbeat active claims nor persist due times.

@@ -41,6 +41,12 @@ class ModernConsumerListener {
 }
 
 function migrationStatements(): string[] {
+  const upgradePath =
+    require.resolve('@nestarc/outbox/src/sql/upgrade-to-current.sql');
+  assert.match(
+    fs.readFileSync(upgradePath, 'utf8'),
+    /ADD COLUMN IF NOT EXISTS claim_token/,
+  );
   const migrationPath =
     require.resolve('@nestarc/outbox/src/sql/create-outbox-table.sql');
   return fs

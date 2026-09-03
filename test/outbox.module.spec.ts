@@ -20,8 +20,57 @@ import type {
 import type { OutboxTransport } from '../src/interfaces/outbox-transport.interface';
 import type { OutboxTenantProvider } from '../src/interfaces/outbox-tenancy.interface';
 
+const schemaInventory = {
+  tableExists: true,
+  columns: [
+    'id',
+    'event_type',
+    'payload',
+    'status',
+    'created_at',
+    'updated_at',
+    'processed_at',
+    'next_attempt_at',
+    'retry_count',
+    'max_retries',
+    'last_error',
+    'tenant_id',
+    'aggregate_type',
+    'aggregate_id',
+    'partition_key',
+    'idempotency_key',
+    'correlation_id',
+    'causation_id',
+    'headers',
+    'occurred_at',
+    'claim_token',
+    'lease_expires_at',
+  ],
+  indexes: [
+    'idx_outbox_pending',
+    'idx_outbox_processing',
+    'idx_outbox_processing_claim_token',
+    'idx_outbox_processing_lease_expiry',
+    'idx_outbox_failed',
+    'idx_outbox_admin_created',
+    'idx_outbox_tenant_admin',
+    'idx_outbox_tenant_status_admin',
+    'idx_outbox_tenant_processing',
+    'idx_outbox_sent_retention',
+    'idx_outbox_tenant_sent_retention',
+  ],
+  constraints: [
+    'chk_status',
+    'chk_retry_count_nonnegative',
+    'chk_max_retries_positive',
+    'chk_payload_object',
+    'chk_headers_object',
+    'chk_nonprocessing_claim_clear',
+  ],
+};
+
 const mockPrisma = {
-  $queryRaw: jest.fn(),
+  $queryRaw: jest.fn().mockResolvedValue([schemaInventory]),
   $executeRaw: jest.fn(),
 };
 

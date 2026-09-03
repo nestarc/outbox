@@ -72,6 +72,13 @@ describe('OutboxAdminService', () => {
       oldestPendingAgeMs: 5000,
       oldestProcessingAgeMs: null,
     });
+    const [template] = prisma.$queryRaw.mock.calls[0];
+    const sql = template.join('');
+    expect(sql).toContain("FROM outbox_events WHERE status = 'PENDING'");
+    expect(sql).toContain("FROM outbox_events WHERE status = 'PROCESSING'");
+    expect(sql).toContain("FROM outbox_events WHERE status = 'SENT'");
+    expect(sql).toContain("FROM outbox_events WHERE status = 'FAILED'");
+    expect(sql).not.toContain('COUNT(*) FILTER');
   });
 
   it('should default stats to zeros when the aggregate query returns no rows', async () => {
@@ -308,6 +315,45 @@ describe('OutboxAdminService', () => {
     expect(sql).toContain('processed_at = NULL');
     expect(sql).toContain('next_attempt_at = NOW()');
     expect(values).toEqual(['evt-1', 'evt-2', 'FAILED']);
+  });
+
+  it('should deduplicate and chunk retryMany below the bind limit', async () => {
+    const { service, prisma } = createService();
+    const ids = Array.from(
+      { length: 10_001 },
+      (_, index) =>
+        `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+    );
+    prisma.$executeRawUnsafe
+      .mockResolvedValueOnce(10_000)
+      .mockResolvedValueOnce(1);
+
+    await expect(service.retryMany([...ids, ids[0]])).resolves.toBe(10_001);
+
+    expect(prisma.$executeRawUnsafe).toHaveBeenCalledTimes(2);
+    const [firstSql, ...firstValues] = prisma.$executeRawUnsafe.mock.calls[0];
+    const [secondSql, ...secondValues] = prisma.$executeRawUnsafe.mock.calls[1];
+    expect(firstSql).toContain('status = $10001');
+    expect(firstValues).toHaveLength(10_001);
+    expect(secondSql).toContain('id IN ($1::uuid)');
+    expect(secondValues).toEqual([ids[10_000], 'FAILED']);
+  });
+
+  it('documents retryMany partial failure as retry-safe independent chunks', async () => {
+    const { service, prisma } = createService();
+    const ids = Array.from(
+      { length: 10_001 },
+      (_, index) =>
+        `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+    );
+    prisma.$executeRawUnsafe
+      .mockResolvedValueOnce(10_000)
+      .mockRejectedValueOnce(new Error('database unavailable'));
+
+    await expect(service.retryMany(ids)).rejects.toThrow(
+      'database unavailable',
+    );
+    expect(prisma.$executeRawUnsafe).toHaveBeenCalledTimes(2);
   });
 
   it('should no-op retryMany for empty ids', async () => {

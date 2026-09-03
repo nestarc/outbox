@@ -16,6 +16,9 @@ import { OutboxCursorError } from './errors/outbox-cursor.error';
 
 const DEFAULT_ADMIN_LIMIT = 50;
 const MAX_ADMIN_LIMIT = 500;
+// Leaves ample room below PostgreSQL's bind-parameter limit for the status and
+// optional tenant predicate while keeping each statement reasonably sized.
+const RETRY_MANY_CHUNK_SIZE = 10_000;
 
 const RECORD_SELECT = `
   id,
@@ -70,31 +73,42 @@ abstract class OutboxAdminBase<TListOptions extends OutboxListOptions> {
       ? await this.queryRawUnsafe<OutboxStatsRow[]>(
           `
             SELECT
-              COUNT(*) FILTER (WHERE status = 'PENDING') AS pending,
-              COUNT(*) FILTER (WHERE status = 'PROCESSING') AS processing,
-              COUNT(*) FILTER (WHERE status = 'SENT') AS sent,
-              COUNT(*) FILTER (WHERE status = 'FAILED') AS failed,
-              EXTRACT(EPOCH FROM (NOW() - MIN(created_at) FILTER (WHERE status = 'PENDING'))) * 1000
-                AS oldest_pending_age_ms,
-              EXTRACT(EPOCH FROM (NOW() - MIN(updated_at) FILTER (WHERE status = 'PROCESSING'))) * 1000
-                AS oldest_processing_age_ms
-            FROM outbox_events
-            WHERE tenant_id = $1
+              pending.count AS pending,
+              processing.count AS processing,
+              sent.count AS sent,
+              failed.count AS failed,
+              EXTRACT(EPOCH FROM (NOW() - pending.oldest_at)) * 1000 AS oldest_pending_age_ms,
+              EXTRACT(EPOCH FROM (NOW() - processing.oldest_at)) * 1000 AS oldest_processing_age_ms
+            FROM
+              (SELECT COUNT(*) AS count, MIN(created_at) AS oldest_at
+               FROM outbox_events WHERE tenant_id = $1 AND status = 'PENDING') pending,
+              (SELECT COUNT(*) AS count, MIN(updated_at) AS oldest_at
+               FROM outbox_events WHERE tenant_id = $1 AND status = 'PROCESSING') processing,
+              (SELECT COUNT(*) AS count
+               FROM outbox_events WHERE tenant_id = $1 AND status = 'SENT') sent,
+              (SELECT COUNT(*) AS count
+               FROM outbox_events WHERE tenant_id = $1 AND status = 'FAILED') failed
           `,
           this.expectedTenantId,
         )
       : await this.options.prisma.$queryRaw<OutboxStatsRow[]>`
-      SELECT
-        COUNT(*) FILTER (WHERE status = 'PENDING') AS pending,
-        COUNT(*) FILTER (WHERE status = 'PROCESSING') AS processing,
-        COUNT(*) FILTER (WHERE status = 'SENT') AS sent,
-        COUNT(*) FILTER (WHERE status = 'FAILED') AS failed,
-        EXTRACT(EPOCH FROM (NOW() - MIN(created_at) FILTER (WHERE status = 'PENDING'))) * 1000
-          AS oldest_pending_age_ms,
-        EXTRACT(EPOCH FROM (NOW() - MIN(updated_at) FILTER (WHERE status = 'PROCESSING'))) * 1000
-          AS oldest_processing_age_ms
-      FROM outbox_events
-    `;
+          SELECT
+            pending.count AS pending,
+            processing.count AS processing,
+            sent.count AS sent,
+            failed.count AS failed,
+            EXTRACT(EPOCH FROM (NOW() - pending.oldest_at)) * 1000 AS oldest_pending_age_ms,
+            EXTRACT(EPOCH FROM (NOW() - processing.oldest_at)) * 1000 AS oldest_processing_age_ms
+          FROM
+            (SELECT COUNT(*) AS count, MIN(created_at) AS oldest_at
+             FROM outbox_events WHERE status = 'PENDING') pending,
+            (SELECT COUNT(*) AS count, MIN(updated_at) AS oldest_at
+             FROM outbox_events WHERE status = 'PROCESSING') processing,
+            (SELECT COUNT(*) AS count
+             FROM outbox_events WHERE status = 'SENT') sent,
+            (SELECT COUNT(*) AS count
+             FROM outbox_events WHERE status = 'FAILED') failed
+        `;
     const row = rows[0] ?? {};
 
     return {
@@ -315,31 +329,47 @@ abstract class OutboxAdminBase<TListOptions extends OutboxListOptions> {
   async retryMany(ids: string[]): Promise<number> {
     if (ids.length === 0) return 0;
 
-    const placeholders = ids
-      .map((_, index) => `$${index + 1}::uuid`)
-      .join(', ');
-    const statusIndex = ids.length + 1;
-    const tenantIndex = statusIndex + 1;
-    const tenantSql = this.expectedTenantId
-      ? `AND tenant_id = $${tenantIndex}`
-      : '';
-    const values: unknown[] = [...ids, 'FAILED'];
-    if (this.expectedTenantId) values.push(this.expectedTenantId);
+    // Duplicates are removed before chunking. Each chunk is independently
+    // committed by the supplied Prisma client; if a later chunk fails, callers
+    // may safely retry the complete request because only FAILED rows qualify.
+    const uniqueIds = [...new Set(ids)];
+    let updated = 0;
+    for (
+      let offset = 0;
+      offset < uniqueIds.length;
+      offset += RETRY_MANY_CHUNK_SIZE
+    ) {
+      const chunk = uniqueIds.slice(offset, offset + RETRY_MANY_CHUNK_SIZE);
+      const placeholders = chunk
+        .map((_, index) => `$${index + 1}::uuid`)
+        .join(', ');
+      const statusIndex = chunk.length + 1;
+      const tenantIndex = statusIndex + 1;
+      const tenantSql = this.expectedTenantId
+        ? `AND tenant_id = $${tenantIndex}`
+        : '';
+      const values: unknown[] = [...chunk, 'FAILED'];
+      if (this.expectedTenantId) values.push(this.expectedTenantId);
 
-    return this.executeRawUnsafe(
-      `
-        UPDATE outbox_events
-        SET status = 'PENDING',
-            last_error = NULL,
-            processed_at = NULL,
-            next_attempt_at = NOW(),
-            updated_at = NOW()
-        WHERE id IN (${placeholders})
-          AND status = $${statusIndex}
-          ${tenantSql}
-      `,
-      ...values,
-    );
+      updated += await this.executeRawUnsafe(
+        `
+          UPDATE outbox_events
+          SET status = 'PENDING',
+              claim_token = NULL,
+              lease_expires_at = NULL,
+              last_error = NULL,
+              processed_at = NULL,
+              next_attempt_at = NOW(),
+              updated_at = NOW()
+          WHERE id IN (${placeholders})
+            AND status = $${statusIndex}
+            ${tenantSql}
+        `,
+        ...values,
+      );
+    }
+
+    return updated;
   }
 
   async markFailed(

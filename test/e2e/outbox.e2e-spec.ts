@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { createHash } from 'crypto';
 import { Test } from '@nestjs/testing';
 import { Injectable, type INestApplication } from '@nestjs/common';
 import { PrismaPg } from '@prisma/adapter-pg';
@@ -16,6 +17,7 @@ import { OnOutboxEvent } from '../../src/outbox.decorator';
 import type { OutboxHandlerContext } from '../../src/interfaces/outbox-handler-context.interface';
 import type { OutboxNotificationClient } from '../../src/interfaces/outbox-wakeup.interface';
 import type { OutboxRecord } from '../../src/interfaces/outbox-record.interface';
+import { OutboxSchemaGuard } from '../../src/outbox.schema';
 
 // --- Test event ---
 class OrderCreatedEvent extends OutboxEvent {
@@ -133,6 +135,26 @@ const INVARIANT_UPGRADE_STATEMENTS = INVARIANT_UPGRADE_SQL_FILE.replace(
   .map((s) => s.trim())
   .filter((s) => s.length > 0);
 
+const CURRENT_UPGRADE_SQL_FILE = fs.readFileSync(
+  path.join(__dirname, '../../src/sql/upgrade-to-current.sql'),
+  'utf-8',
+);
+const CURRENT_UPGRADE_STATEMENTS = CURRENT_UPGRADE_SQL_FILE.replace(
+  /^\s*--.*$/gm,
+  '',
+)
+  .split(';')
+  .map((s) => s.trim())
+  .filter((s) => s.length > 0);
+
+const SCHEMA_FIXTURE_DIRECTORY = path.join(__dirname, 'fixtures');
+const SCHEMA_FIXTURES = JSON.parse(
+  fs.readFileSync(
+    path.join(SCHEMA_FIXTURE_DIRECTORY, 'schema-fixtures.json'),
+    'utf8',
+  ),
+) as Record<string, { tag: string; path: string; sha256: string }>;
+
 async function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -201,15 +223,95 @@ describe('Outbox E2E', () => {
     ).toEqual(
       expect.arrayContaining([
         'idx_outbox_aggregate',
+        'idx_outbox_admin_created',
         'idx_outbox_failed',
         'idx_outbox_pending',
         'idx_outbox_processing',
         'idx_outbox_processing_claim_token',
         'idx_outbox_processing_lease_expiry',
+        'idx_outbox_sent_retention',
+        'idx_outbox_tenant_admin',
         'idx_outbox_tenant_pending',
+        'idx_outbox_tenant_processing',
+        'idx_outbox_tenant_sent_retention',
+        'idx_outbox_tenant_status_admin',
         'outbox_events_pkey',
       ]),
     );
+  });
+
+  it('diagnoses and upgrades exact v0.1.0 and v0.2.1 schemas to current', async () => {
+    for (const [expectedRelease, fixture] of Object.entries(SCHEMA_FIXTURES)) {
+      expect(fixture.tag).toBe(expectedRelease);
+      const fixtureSql = fs.readFileSync(
+        path.join(SCHEMA_FIXTURE_DIRECTORY, fixture.path),
+        'utf8',
+      );
+      expect(createHash('sha256').update(fixtureSql).digest('hex')).toBe(
+        fixture.sha256,
+      );
+      const fixtureStatements = fixtureSql
+        .replace(/^\s*--.*$/gm, '')
+        .split(';')
+        .map((statement) => statement.trim())
+        .filter((statement) => statement.length > 0);
+
+      await prisma.$executeRawUnsafe('DROP TABLE IF EXISTS outbox_events');
+      for (const statement of fixtureStatements) {
+        await prisma.$executeRawUnsafe(statement);
+      }
+      await prisma.$executeRawUnsafe(
+        `INSERT INTO outbox_events (event_type, payload, status, retry_count, last_error)
+         VALUES ('legacy.retry', '{}'::jsonb, 'FAILED', 2, 'legacy detail')`,
+      );
+
+      const legacyGuard = new OutboxSchemaGuard({ prisma });
+      await expect(legacyGuard.onModuleInit()).rejects.toMatchObject({
+        code: 'OUTBOX_SCHEMA_MISMATCH',
+        actualVersion: expectedRelease === 'v0.1.0' ? '0.1.x' : '0.2.x',
+      });
+
+      for (let pass = 0; pass < 2; pass++) {
+        for (const statement of CURRENT_UPGRADE_STATEMENTS) {
+          await prisma.$executeRawUnsafe(statement);
+        }
+      }
+
+      await expect(
+        new OutboxSchemaGuard({ prisma }).onModuleInit(),
+      ).resolves.toBeUndefined();
+      const [legacy] = await prisma.$queryRaw<
+        Array<{
+          status: string;
+          retryCount: number;
+          lastError: string;
+          headers: Record<string, unknown>;
+          claimToken: string | null;
+          leaseExpiresAt: Date | null;
+          nextAttemptAt: Date | null;
+        }>
+      >`
+        SELECT
+          status,
+          retry_count AS "retryCount",
+          last_error AS "lastError",
+          headers,
+          claim_token::text AS "claimToken",
+          lease_expires_at AS "leaseExpiresAt",
+          next_attempt_at AS "nextAttemptAt"
+        FROM outbox_events
+        WHERE event_type = 'legacy.retry'
+      `;
+      expect(legacy).toEqual({
+        status: 'FAILED',
+        retryCount: 2,
+        lastError: 'legacy detail',
+        headers: {},
+        claimToken: null,
+        leaseExpiresAt: null,
+        nextAttemptAt: null,
+      });
+    }
   });
 
   it('upgrades a current table with the claim token fence idempotently', async () => {
@@ -1691,6 +1793,132 @@ describe('Outbox E2E', () => {
     );
     expect(observed).toEqual(expectedIds);
     expect(new Set(observed).size).toBe(expectedIds.length);
+  });
+
+  it('chunks a 10,001-row admin retry without bind-limit or duplicate-count errors', async () => {
+    await prisma.$executeRawUnsafe(`
+      INSERT INTO outbox_events (
+        event_type, payload, status, retry_count, last_error, processed_at
+      )
+      SELECT
+        'bulk.retry.' || value,
+        '{}'::jsonb,
+        'FAILED',
+        1,
+        'retryable',
+        NOW()
+      FROM generate_series(1, 10001) value
+    `);
+    const rows = await prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT id
+      FROM outbox_events
+      WHERE event_type LIKE 'bulk.retry.%'
+      ORDER BY id
+    `;
+    const admin = new OutboxAdminService({ prisma });
+
+    await expect(
+      admin.retryMany([
+        ...rows.map((row: { id: string }) => row.id),
+        rows[0].id,
+      ]),
+    ).resolves.toBe(10_001);
+
+    const [counts] = await prisma.$queryRaw<
+      Array<{ pending: bigint; failed: bigint }>
+    >`
+      SELECT
+        COUNT(*) FILTER (WHERE status = 'PENDING') AS pending,
+        COUNT(*) FILTER (WHERE status = 'FAILED') AS failed
+      FROM outbox_events
+      WHERE event_type LIKE 'bulk.retry.%'
+    `;
+    expect(Number(counts.pending)).toBe(10_001);
+    expect(Number(counts.failed)).toBe(0);
+  });
+
+  it('uses cursor and retention indexes on a representative admin history', async () => {
+    await prisma.$executeRawUnsafe(`
+      INSERT INTO outbox_events (
+        event_type,
+        payload,
+        status,
+        tenant_id,
+        created_at,
+        updated_at,
+        processed_at,
+        next_attempt_at
+      )
+      SELECT
+        'plan.event.' || value,
+        '{}'::jsonb,
+        CASE value % 4
+          WHEN 0 THEN 'PENDING'
+          WHEN 1 THEN 'PROCESSING'
+          WHEN 2 THEN 'SENT'
+          ELSE 'FAILED'
+        END,
+        'tenant-' || (value % 20),
+        NOW() - make_interval(secs => value),
+        NOW() - make_interval(secs => value),
+        CASE WHEN value % 4 IN (2, 3)
+          THEN NOW() - make_interval(secs => value)
+          ELSE NULL
+        END,
+        CASE WHEN value % 4 = 0 THEN NOW() ELSE NULL END
+      FROM generate_series(1, 20000) value
+    `);
+    await prisma.$executeRawUnsafe('ANALYZE outbox_events');
+
+    const cursorPlan = (await prisma.$queryRawUnsafe(
+      `
+      EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)
+      SELECT id
+      FROM outbox_events
+      WHERE tenant_id = $1 AND status = 'FAILED'
+      ORDER BY created_at DESC, id DESC
+      LIMIT 51
+    `,
+      'tenant-3',
+    )) as unknown[];
+    const tenantCursorPlan = (await prisma.$queryRawUnsafe(
+      `
+      EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)
+      SELECT id
+      FROM outbox_events
+      WHERE tenant_id = $1
+      ORDER BY created_at DESC, id DESC
+      LIMIT 51
+    `,
+      'tenant-3',
+    )) as unknown[];
+    const retentionPlan = (await prisma.$queryRawUnsafe(`
+      EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)
+      SELECT id
+      FROM outbox_events
+      WHERE status = 'SENT' AND processed_at < NOW()
+      ORDER BY processed_at ASC
+      LIMIT 50
+    `)) as unknown[];
+    expect(JSON.stringify(cursorPlan)).toContain(
+      'idx_outbox_tenant_status_admin',
+    );
+    expect(JSON.stringify(tenantCursorPlan)).toContain(
+      'idx_outbox_tenant_admin',
+    );
+    expect(JSON.stringify(retentionPlan)).toContain(
+      'idx_outbox_sent_retention',
+    );
+
+    const stats = await new OutboxAdminService({ prisma }).getStats();
+    expect(stats).toEqual(
+      expect.objectContaining({
+        pending: 5_000,
+        processing: 5_000,
+        sent: 5_000,
+        failed: 5_000,
+      }),
+    );
   });
 
   describe('admin retry flow', () => {

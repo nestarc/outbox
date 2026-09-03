@@ -169,29 +169,27 @@ psql "$DATABASE_URL" -f "$(node -e "console.log(require.resolve('@nestarc/outbox
 
 The file creates the table, retry/status indexes, and metadata indexes. It is safe to run multiple times (`CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS`).
 
-For an existing 0.1.x install, apply the additive upgrade file:
+For every existing 0.1.x or 0.2.x install, stop/drain old pollers and apply the
+single idempotent current upgrade before starting this runtime:
 
 ```bash
-psql "$DATABASE_URL" -f "$(node -e "console.log(require.resolve('@nestarc/outbox/src/sql/upgrade-0.1-to-0.2.sql'))")"
+psql "$DATABASE_URL" -f "$(node -e "console.log(require.resolve('@nestarc/outbox/src/sql/upgrade-to-current.sql'))")"
 ```
 
-Existing 0.2.x installations must drain their old pollers, apply the
-idempotent ownership and retry-schedule upgrades, and then start the new
-runtime. Old 0.2.x pollers do not heartbeat active claims or persist retry due
-times.
-
-```bash
-psql "$DATABASE_URL" -f "$(node -e "console.log(require.resolve('@nestarc/outbox/src/sql/upgrade-add-claim-token.sql'))")"
-psql "$DATABASE_URL" -f "$(node -e "console.log(require.resolve('@nestarc/outbox/src/sql/upgrade-add-lease.sql'))")"
-psql "$DATABASE_URL" -f "$(node -e "console.log(require.resolve('@nestarc/outbox/src/sql/upgrade-add-next-attempt-at.sql'))")"
-psql "$DATABASE_URL" -f "$(node -e "console.log(require.resolve('@nestarc/outbox/src/sql/upgrade-add-invariants.sql'))")"
-```
-
-The invariant upgrade validates existing rows and fails if it finds a negative
+The unified upgrade adds v0.2 metadata plus claim ownership, lease, persisted
+retry scheduling, admin cursor/retention indexes, and current CHECK
+constraints. It validates existing rows and fails if it finds a negative
 retry count, a non-positive retry limit, a non-object payload/headers value, or
 claim metadata attached to a non-`PROCESSING` row. Repair or quarantine those
 rows explicitly before retrying the migration; the runtime will not dispatch
-them silently.
+them silently. Index replacement and CHECK validation can acquire locks, so
+schedule a maintenance window for large tables.
+
+At Nest initialization the package inventories the table, columns, required
+indexes, and constraints. An old or incomplete database fails before polling
+with `OutboxSchemaError` (`OUTBOX_SCHEMA_MISMATCH`), including
+`requiredVersion`, the detected `actualVersion`, and missing objects. This is a
+diagnostic check, not an automatic migration; apply the shipped SQL explicitly.
 
 <details>
 <summary>View the full SQL</summary>
@@ -252,8 +250,31 @@ CREATE INDEX IF NOT EXISTS idx_outbox_processing_lease_expiry
 
 -- FAILED events: admin/monitoring queries
 CREATE INDEX IF NOT EXISTS idx_outbox_failed
-  ON outbox_events (created_at DESC)
+  ON outbox_events (created_at DESC, id DESC)
   WHERE status = 'FAILED';
+
+CREATE INDEX IF NOT EXISTS idx_outbox_admin_created
+  ON outbox_events (created_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_outbox_tenant_admin
+  ON outbox_events (tenant_id, created_at DESC, id DESC)
+  WHERE tenant_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_outbox_tenant_status_admin
+  ON outbox_events (tenant_id, status, created_at DESC, id DESC)
+  WHERE tenant_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_outbox_tenant_processing
+  ON outbox_events (tenant_id, updated_at ASC)
+  WHERE status = 'PROCESSING' AND tenant_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_outbox_sent_retention
+  ON outbox_events (processed_at ASC, id ASC)
+  WHERE status = 'SENT';
+
+CREATE INDEX IF NOT EXISTS idx_outbox_tenant_sent_retention
+  ON outbox_events (tenant_id, processed_at ASC, id ASC)
+  WHERE status = 'SENT' AND tenant_id IS NOT NULL;
 
 -- Aggregate lookup/replay support only; this is not a FIFO constraint
 CREATE INDEX IF NOT EXISTS idx_outbox_aggregate
@@ -505,7 +526,28 @@ The allowed source-state matrix is:
 | Any operation | `PROCESSING`   | unchanged                   |
 
 `retryMany()` and `purgeSent()` remain count-returning batch operations. Their
-SQL source predicates skip ineligible rows atomically.
+SQL source predicates skip ineligible rows atomically. `retryMany()`
+deduplicates ids and executes at most 10,000 ids per statement, below the
+PostgreSQL bind limit. Chunks commit independently through the configured
+Prisma client: if a later chunk fails, its Promise rejects after earlier chunks
+may have committed. Retrying the complete id list is safe because only rows
+still in `FAILED` qualify, and the returned count includes only rows changed by
+that invocation.
+
+Admin pages use `(created_at DESC, id DESC)` indexes, including a tenant/status
+composite path; retention deletes use partial `SENT(processed_at, id)` indexes.
+`getStats()` is an exact, point-in-time set of four status aggregates rather
+than an estimate, so it still reads every qualifying index/table entry and can
+be expensive on a large retained history. Cache or sample outside this package
+when an approximate dashboard is sufficient.
+
+Outbox retains `payload`, `headers`, `last_error`, and all metadata for the
+entire lifetime of each row. The built-in purge removes only `SENT` rows older
+than the requested `processed_at` cutoff; `PENDING`, `PROCESSING`, and `FAILED`
+rows have no automatic TTL. Applications own data classification, redaction
+before emit/error recording, access control, backup policy, and any approved
+archive or failed-row deletion workflow. Do not put credentials or unnecessary
+personal data in payloads, headers, or error text.
 
 ## Tenancy
 

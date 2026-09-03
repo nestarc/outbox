@@ -12,6 +12,7 @@ const REQUIRED_ROOT_FILES = ['LICENSE', 'README.md', 'package.json'];
 const REQUIRED_SQL_FILES = [
   'src/sql/create-outbox-table.sql',
   'src/sql/upgrade-0.1-to-0.2.sql',
+  'src/sql/upgrade-to-current.sql',
 ];
 
 function sha512(buffer) {
@@ -96,6 +97,19 @@ function inspectArchive(tarballPath) {
     const manifest = JSON.parse(
       fs.readFileSync(path.join(packageDirectory, 'package.json'), 'utf8'),
     );
+    const readme = fs.readFileSync(
+      path.join(packageDirectory, 'README.md'),
+      'utf8',
+    );
+    for (const sqlFile of [
+      'src/sql/create-outbox-table.sql',
+      'src/sql/upgrade-to-current.sql',
+    ]) {
+      assert.ok(
+        readme.includes(`@nestarc/outbox/${sqlFile}`),
+        `packed README is missing the runnable command for ${sqlFile}`,
+      );
+    }
     assert.equal(manifest.name, '@nestarc/outbox');
     assert.match(manifest.version, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/);
     for (const field of ['main', 'types']) {

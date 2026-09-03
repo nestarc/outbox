@@ -2,6 +2,7 @@ import {
   Inject,
   Injectable,
   Logger,
+  Optional,
   type OnModuleInit,
   type OnApplicationShutdown,
 } from '@nestjs/common';
@@ -36,6 +37,7 @@ import {
   validateDeliveryTransport,
   validateOutboxOptions,
 } from './outbox-invariants';
+import { OutboxSchemaGuard } from './outbox.schema';
 
 const POLL_INTERVAL_NAME = 'outbox-poll';
 
@@ -89,6 +91,7 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
     private readonly transport: OutboxTransport | OutboxPublisher,
     private readonly explorer: OutboxExplorer,
     private readonly schedulerRegistry: SchedulerRegistry,
+    @Optional() private readonly schemaGuard?: OutboxSchemaGuard,
   ) {
     validateOutboxOptions(options);
     validateDeliveryTransport(options, transport);
@@ -111,7 +114,8 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
     this.deliveryMode = options.delivery?.mode ?? 'local';
   }
 
-  onModuleInit(): void {
+  async onModuleInit(): Promise<void> {
+    if (this.schemaGuard) await this.schemaGuard.assertCompatible();
     if (!this.pollingEnabled) return;
 
     const interval = setInterval(() => this.requestPoll(), this.interval);

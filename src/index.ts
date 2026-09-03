@@ -31,6 +31,11 @@ export {
   OUTBOX_WAKEUP_UNAVAILABLE,
   OutboxWakeupUnavailableError,
 } from './errors/outbox-wakeup-unavailable.error';
+export {
+  OUTBOX_SCHEMA_MISMATCH,
+  OutboxSchemaError,
+} from './errors/outbox-schema.error';
+export { REQUIRED_OUTBOX_SCHEMA_VERSION } from './outbox.schema';
 export { OnOutboxEvent } from './outbox.decorator';
 
 // Transport

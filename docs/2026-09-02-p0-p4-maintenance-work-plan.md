@@ -188,11 +188,11 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 |   17 | `OUT-M15`      | P2       | `DONE`     | S    | `OUT-M01`                                                                            | hook의 불변성·commit 의미 문서화                                    |
 |   18 | `OUT-M16`      | P2       | `DONE`     | M    | 없음                                                                                 | envelope·JSON·bulk 입력 계약                                        |
 |   19 | `OUT-M17`      | P2       | `DONE`     | S    | 없음                                                                                 | ordering 비보장과 deterministic cursor 계약                         |
-|   20 | `OUT-M18`      | P2       | `READY`    | M    | `OUT-M05`, `OUT-M07–08`, `OUT-M17`                                                   | admin pagination/retention/bulk 성능                                |
-|   21 | `OUT-M19`      | P2       | `BLOCKED`  | L    | `OUT-M01–02`, `OUT-M05`, `OUT-M10`                                                   | schema upgrade/diagnostic compatibility                             |
+|   20 | `OUT-M18`      | P2       | `DONE`     | M    | `OUT-M05`, `OUT-M07–08`, `OUT-M17`                                                   | admin pagination/retention/bulk 성능                                |
+|   21 | `OUT-M19`      | P2       | `DONE`     | L    | `OUT-M01–02`, `OUT-M05`, `OUT-M10`                                                   | schema upgrade/diagnostic compatibility                             |
 |  22A | `OUT-M20A`     | P2       | `BLOCKED`  | M    | `OUT-M01`, `OUT-M05–06`, `OUT-M10`                                                   | publisher terminal/tenant-context PostgreSQL E2E                    |
 |  22B | `OUT-M20B`     | P2       | `READY`    | M    | `OUT-M03`, `OUT-M09`                                                                 | LISTEN/NOTIFY wakeup/fallback PostgreSQL E2E                        |
-|  22C | `OUT-M20C`     | P2       | `BLOCKED`  | M    | `OUT-M02`, `OUT-M05`, `OUT-M19`                                                      | shutdown/retry/upgrade 통합 PostgreSQL E2E                          |
+|  22C | `OUT-M20C`     | P2       | `READY`    | M    | `OUT-M02`, `OUT-M05`, `OUT-M19`                                                      | shutdown/retry/upgrade 통합 PostgreSQL E2E                          |
 |   23 | `OUT-M22`      | P2       | `READY`    | M    | 없음                                                                                 | dev dependency audit remediation                                    |
 |   24 | `OUT-M23`      | P2       | `DECISION` | M    | 없음                                                                                 | explicit root/SQL package export 계약                               |
 |   25 | `OUT-M24`      | P2       | `READY`    | S    | 없음                                                                                 | 과거 문서 권위와 현재 handover 정리                                 |
@@ -543,19 +543,23 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 
 ### `OUT-M18` — admin pagination, retention, bulk performance
 
-- 상태: `P2 / READY`; 선행 `OUT-M05`, `OUT-M07–08`, `OUT-M17` 완료.
-- stable cursor와 tenant predicate를 결합한다.
-- `retryMany` bind-limit chunking과 partial failure 의미를 정한다.
-- global stats/full-history count, purge/retention index는 `EXPLAIN ANALYZE` 증거 뒤 추가한다.
-- payload/header/error의 보존 기간과 redaction 책임을 문서화한다.
+- 상태: `P2 / DONE`; 선행 `OUT-M05`, `OUT-M07–08`, `OUT-M17` 완료.
+- [x] stable cursor와 tenant predicate를 결합한다.
+- [x] `retryMany` bind-limit chunking과 partial failure 의미를 정한다.
+- [x] global stats/full-history count, purge/retention index는 `EXPLAIN ANALYZE` 증거 뒤 추가한다.
+- [x] payload/header/error의 보존 기간과 redaction 책임을 문서화한다.
+
+검증: 프로필 A/B/D/F. 10,001건 retry와 20,000행 `EXPLAIN ANALYZE` 증거는 `docs/reports/2026-09-03-out-m18-m19-admin-schema.md`에 기록했다. 새 index와 내부 batch 실행은 additive이며 누적 변경과 같은 next pre-1.0 minor(기본 0.3.0) 대상으로 결정했다.
 
 ### `OUT-M19` — schema upgrade와 diagnostic compatibility
 
-- 선행: `OUT-M01–02`, `OUT-M05`, `OUT-M10`.
-- fresh, v0.1→current, v0.2→current fixture DDL을 release tag/checksum과 함께 고정하고 실제 PostgreSQL로 검증한다.
-- claim/lease/next-attempt column과 index/CHECK를 idempotent하게 적용한다.
-- schema가 오래됐을 때 generic query error 대신 required/actual version 진단을 제공한다.
-- package에 포함되는 SQL asset와 README 명령을 packed tarball에서 검증한다.
+- 상태: `P2 / DONE`; 선행 `OUT-M01–02`, `OUT-M05`, `OUT-M10` 완료.
+- [x] fresh, v0.1→current, v0.2→current fixture DDL을 release tag/checksum과 함께 고정하고 실제 PostgreSQL로 검증한다.
+- [x] claim/lease/next-attempt column과 index/CHECK를 idempotent하게 적용한다.
+- [x] schema가 오래됐을 때 generic query error 대신 required/actual version 진단을 제공한다.
+- [x] package에 포함되는 SQL asset와 README 명령을 packed tarball에서 검증한다.
+
+검증: 프로필 A/B/D/F. exact v0.1.0/v0.2.1 fixture SHA-256, 2회 적용 unified upgrade, typed startup 진단, Prisma 5/7 exact packed consumer가 통과했다. mandatory migration과 additive public error/export이므로 누적 변경과 같은 next pre-1.0 minor(기본 0.3.0) 대상으로 결정했다.
 
 ### `OUT-M20A` — publisher terminal과 tenant-context PostgreSQL E2E
 
@@ -770,6 +774,8 @@ Outbox ── durable record / publisher callback ──> Jobs adapter ──> J
 | 2026-09-03 | `OUT-M15`   | `DONE`     | local main `2c83fa1` working tree                | hook rollback/mutation/error contract; unit 188, E2E 28, packed Prisma 7 consumer PASS          | 변경 review 후 OUT-M15–17을 함께 commit/push/PR                        |
 | 2026-09-03 | `OUT-M16`   | `DONE`     | local main `2c83fa1` working tree                | stable envelope error, 1,000-row chunk, duplicate discovery; source/DB/packed PASS              | 변경 review 후 OUT-M15–17을 함께 commit/push/PR                        |
 | 2026-09-03 | `OUT-M17`   | `DONE`     | local main `2c83fa1` working tree                | `(created_at,id)` cursor unit + identical timestamp PostgreSQL E2E PASS                         | 선행이 해소된 `OUT-M18`을 `READY`로 전환                               |
+| 2026-09-03 | `OUT-M18`   | `DONE`     | local main `c1bd9e6` working tree                | unit 193; PostgreSQL E2E 31; 10,001 retry + 20,000행 EXPLAIN; packed Prisma 5/7 PASS            | 완료된 M19와 함께 review/commit/push/PR                                |
+| 2026-09-03 | `OUT-M19`   | `DONE`     | local main `c1bd9e6` working tree                | v0.1.0/v0.2.1 checksum + 2회 upgrade; typed schema 진단; exact tgz SQL/README 검증 PASS         | 선행이 해소된 `OUT-M20C`를 `READY`로 전환                              |
 
 ### `OUT-M01` 종료 인계
 
@@ -1054,4 +1060,34 @@ Unverified paths and reason: 대량 page EXPLAIN ANALYZE와 cursor/tenant 복합
 External PR, run, release evidence: 없음. local disposable PostgreSQL 16에서 실제 tuple boundary를 검증했다.
 Remaining risk: 페이지 사이 concurrent insert/delete는 snapshot isolation을 제공하지 않는다. cursor는 stable exclusive boundary이지 multi-page transaction snapshot이 아니다. strict aggregate/partition FIFO는 OUT-B01 backlog다.
 Next exact action: OUT-M18을 READY로 전환했다. OUT-M15–17 변경 review/commit/push/PR 뒤 OUT-M18 성능/retention scope를 시작한다.
+```
+
+### `OUT-M18` 종료 인계
+
+```text
+Task: OUT-M18
+State: DONE
+Start ref / end ref: local main@c1bd9e6 / local working tree (uncommitted)
+Changed files: admin status-specific stats와 retryMany dedupe/10,000-id chunking, cursor/tenant/processing/retention indexes, 대량 unit/PostgreSQL EXPLAIN fixture, README retention/redaction/partial-failure 계약, CHANGELOG, evidence report, maintenance plan
+Contract / semver decision: retryMany는 기존 count API를 유지하되 chunk는 configured Prisma client에서 독립 commit된다. 뒤 chunk 실패 전 앞 chunk가 commit될 수 있으며 전체 id replay는 FAILED predicate 때문에 안전하다. exact stats는 추정치가 아니므로 retained history에 선형 비용이 남는다. 새 index와 내부 batch 실행은 additive이며 누적 next pre-1.0 minor(기본 0.3.0) 대상으로 결정했다.
+Commands and exact results: unit 10 suites/193 tests PASS; lint PASS; build typecheck/build PASS; PostgreSQL 16 E2E 1 suite/31 tests PASS; 10,001-row retry 192 ms, 20,000-row plan/stats fixture 285 ms; plain EXPLAIN cursor 0.075 ms, retention index-only 0.031 ms, exact four-status stats 3.617 ms; Prettier와 git diff --check PASS
+Unverified paths and reason: production cardinality/real tenant skew와 autovacuum visibility-map 상태의 장기 benchmark는 OUT-M27 또는 운영 관측 범위다. 원격 GitHub Actions는 push 전이라 미실행이다.
+External PR, run, release evidence: 없음. disposable compose project outbox-out-m18-m19-20260903과 docs/reports/2026-09-03-out-m18-m19-admin-schema.md에 실제 plan을 기록했다.
+Remaining risk: PostgreSQL은 분포에 따라 tenant composite 대신 narrower FAILED partial index를 선택할 수 있고 exact stats는 모든 qualifying entry를 읽는다. PENDING/PROCESSING/FAILED 자동 TTL은 제공하지 않으며 application이 보존·redaction·archive 정책을 소유한다.
+Next exact action: OUT-M19와 함께 diff를 review하고 path-scoped commit/push/PR한다.
+```
+
+### `OUT-M19` 종료 인계
+
+```text
+Task: OUT-M19
+State: DONE
+Start ref / end ref: local main@c1bd9e6 / local working tree (uncommitted)
+Changed files: unified current upgrade SQL, exact tagged v0.1.0/v0.2.1 fixture와 checksum manifest, typed startup schema guard/error/export, fresh/current/historical PostgreSQL tests, packed artifact/Prisma 5/7 SQL resolution, README/CHANGELOG/evidence report/maintenance plan
+Contract / semver decision: runtime은 자동 migration하지 않고 Nest init에서 required 0.3.0 structural inventory를 검사한다. missing/0.1.x/0.2.x/incomplete-current를 OUTBOX_SCHEMA_MISMATCH의 requiredVersion/actualVersion/missing으로 진단한다. mandatory unified migration과 additive public error/export은 누적 next pre-1.0 minor(기본 0.3.0) 대상이다.
+Commands and exact results: tag fixture SHA-256 v0.1.0=d6b276fce130d9a494390116f296939ef5725ca210c6ebfd2ea6e1b9e86a2634, v0.2.1=0f17f8a40226f1d6c13172f81f4163cc528d883d13b1381f07db7cec159829cb; 양쪽 unified upgrade 2회 적용과 legacy row 보존 PASS; unit 193, PostgreSQL E2E 31, lint/typecheck/build PASS; exact tgz 69,468 bytes, 134 files, sha512-argw2M3X4tazx0m83Sbssfei210W9dd6rUomJGxBrJqFOchkhcLeP8VJGUtrnznWOepC7i3Z1REdjZSLyXCAJg==, sha256 7f0cb8de969b4ab715b72b9687482c38cc2b8d727f07c495a42fd30e01778cb3; same tgz strict Nest 11.2.1/Prisma 7.10.0과 Nest 10.4.22/Prisma 5.22.0 install/typecheck/build/PostgreSQL smoke PASS; packed README/SQL allowlist PASS
+Unverified paths and reason: 원격 GitHub Actions와 실제 production-size lock duration은 push/deployment 전이라 미실행이다. exact Prisma 6은 같은 legacy fixture 계열이지만 이번 세션에서는 5 floor와 7 modern control로 schema guard를 검증했다.
+External PR, run, release evidence: 없음. disposable PostgreSQL 16과 branch-local exact tarball을 사용했고 report에 fixture provenance와 plan을 기록했다.
+Remaining risk: CHECK 재검증과 old index replacement는 큰 table에서 lock을 획득할 수 있어 maintenance window가 필요하다. structural version은 migration history table이 아니라 required object inventory이며 application이 같은 이름을 다른 정의로 교체한 semantic drift까지 전부 증명하지 않는다.
+Next exact action: OUT-M18과 함께 review/commit/push/PR하고 원격 CI를 확인한다. 선행이 해소된 다음 작업은 OUT-M20C다.
 ```
