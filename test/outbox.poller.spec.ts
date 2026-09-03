@@ -104,6 +104,7 @@ describe('OutboxPoller', () => {
       clearInterval(interval);
     }
     registeredIntervals = [];
+    jest.useRealTimers();
   });
 
   describe('onModuleInit', () => {
@@ -133,9 +134,82 @@ describe('OutboxPoller', () => {
 
       expect(schedulerRegistry.addInterval).not.toHaveBeenCalled();
     });
+
+    it('isolates timer poll failures and recovers on the next interval', async () => {
+      jest.useFakeTimers();
+      const prisma = createMockPrisma();
+      prisma.$queryRaw
+        .mockRejectedValueOnce(new Error('database unavailable'))
+        .mockResolvedValueOnce([]);
+      const poller = createPoller({
+        prisma,
+        options: { polling: { enabled: true, interval: 100 } },
+      });
+      const warn = jest
+        .spyOn((poller as any).logger, 'warn')
+        .mockImplementation(() => undefined);
+
+      poller.onModuleInit();
+
+      await jest.advanceTimersByTimeAsync(100);
+      expect(warn).toHaveBeenCalledWith(
+        'Outbox background poll failed: database unavailable',
+      );
+
+      await jest.advanceTimersByTimeAsync(100);
+      expect(prisma.$queryRaw).toHaveBeenCalledTimes(2);
+      jest.useRealTimers();
+    });
   });
 
   describe('poll', () => {
+    it('coalesces concurrent triggers into one in-flight poll and one rerun', async () => {
+      let releaseFirstPoll!: () => void;
+      const firstPollBarrier = new Promise<void>((resolve) => {
+        releaseFirstPoll = resolve;
+      });
+      let activeQueries = 0;
+      let maxActiveQueries = 0;
+      const prisma = createMockPrisma();
+      prisma.$queryRaw.mockImplementation(async () => {
+        activeQueries++;
+        maxActiveQueries = Math.max(maxActiveQueries, activeQueries);
+        try {
+          if (prisma.$queryRaw.mock.calls.length === 1) {
+            await firstPollBarrier;
+          }
+          return [];
+        } finally {
+          activeQueries--;
+        }
+      });
+      const poller = createPoller({ prisma });
+
+      const first = poller.poll();
+      await Promise.resolve();
+      const burst = Array.from({ length: 100 }, () => poller.poll());
+
+      expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+      releaseFirstPoll();
+      await Promise.all([first, ...burst]);
+
+      expect(prisma.$queryRaw).toHaveBeenCalledTimes(2);
+      expect(maxActiveQueries).toBe(1);
+    });
+
+    it('allows a later trigger to recover after a transient poll failure', async () => {
+      const prisma = createMockPrisma();
+      prisma.$queryRaw
+        .mockRejectedValueOnce(new Error('temporary database failure'))
+        .mockResolvedValueOnce([]);
+      const poller = createPoller({ prisma });
+
+      await expect(poller.poll()).rejects.toThrow('temporary database failure');
+      await expect(poller.poll()).resolves.toBeUndefined();
+
+      expect(prisma.$queryRaw).toHaveBeenCalledTimes(2);
+    });
+
     it('keeps the claimed identity when a hook mutates its record snapshot', async () => {
       const record = createRecord({
         payload: { order: { id: 'order-1' } },
@@ -746,6 +820,29 @@ describe('OutboxPoller', () => {
       await pollPromise;
       await shutdownPromise;
       expect(shutdownDone).toBe(true);
+    });
+
+    it('drops a queued rerun while waiting for the in-flight poll', async () => {
+      let releaseFetch!: () => void;
+      const fetchBarrier = new Promise<void>((resolve) => {
+        releaseFetch = resolve;
+      });
+      const prisma = createMockPrisma();
+      prisma.$queryRaw.mockImplementation(async () => {
+        await fetchBarrier;
+        return [];
+      });
+      const poller = createPoller({ prisma });
+
+      const inFlight = poller.poll();
+      await Promise.resolve();
+      const queued = poller.poll();
+      const shutdown = poller.onApplicationShutdown();
+
+      releaseFetch();
+      await Promise.all([inFlight, queued, shutdown]);
+
+      expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
     });
   });
 });

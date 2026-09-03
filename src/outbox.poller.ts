@@ -61,6 +61,8 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
   private activeCount = 0;
   private pollInFlight = 0;
   private pollCount = 0;
+  private pollCoordinator: Promise<void> | null = null;
+  private pollRerunRequested = false;
 
   private readonly pollingEnabled: boolean;
   private readonly interval: number;
@@ -89,7 +91,7 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
   onModuleInit(): void {
     if (!this.pollingEnabled) return;
 
-    const interval = setInterval(() => this.poll(), this.interval);
+    const interval = setInterval(() => this.requestPoll(), this.interval);
     this.schedulerRegistry.addInterval(POLL_INTERVAL_NAME, interval);
     this.logger.log(
       `Outbox poller started (interval: ${this.interval}ms, batch: ${this.batchSize})`,
@@ -98,6 +100,7 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
 
   async onApplicationShutdown(): Promise<void> {
     this.isShuttingDown = true;
+    this.pollRerunRequested = false;
 
     try {
       this.schedulerRegistry.deleteInterval(POLL_INTERVAL_NAME);
@@ -120,7 +123,77 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
     }
   }
 
-  async poll(): Promise<void> {
+  poll(): Promise<void> {
+    return this.schedulePoll() ?? Promise.resolve();
+  }
+
+  requestPoll(): void {
+    const alreadyRunning = this.pollCoordinator !== null;
+    const coordinator = this.schedulePoll();
+    if (!coordinator || alreadyRunning) return;
+
+    void coordinator.catch((error: unknown) => {
+      const err = error instanceof Error ? error : new Error(String(error));
+      this.logger.warn(`Outbox background poll failed: ${err.message}`);
+    });
+  }
+
+  private schedulePoll(): Promise<void> | null {
+    if (this.isShuttingDown) return null;
+
+    if (this.pollCoordinator) {
+      this.pollRerunRequested = true;
+      return this.pollCoordinator;
+    }
+
+    let resolveCoordinator!: () => void;
+    let rejectCoordinator!: (error: unknown) => void;
+    const coordinator = new Promise<void>((resolve, reject) => {
+      resolveCoordinator = resolve;
+      rejectCoordinator = reject;
+    });
+    this.pollCoordinator = coordinator;
+    void this.drainPolls().then(
+      () => {
+        this.finishPoll(coordinator);
+        resolveCoordinator();
+      },
+      (error: unknown) => {
+        this.finishPoll(coordinator);
+        rejectCoordinator(error);
+      },
+    );
+    return coordinator;
+  }
+
+  private finishPoll(coordinator: Promise<void>): void {
+    if (this.pollCoordinator === coordinator) {
+      this.pollCoordinator = null;
+    }
+  }
+
+  private async drainPolls(): Promise<void> {
+    let firstError: unknown;
+    let failed = false;
+
+    do {
+      this.pollRerunRequested = false;
+      try {
+        await this.pollOnce();
+      } catch (error) {
+        if (!failed) {
+          firstError = error;
+          failed = true;
+        }
+      }
+    } while (this.pollRerunRequested && !this.isShuttingDown);
+
+    if (failed) {
+      throw firstError;
+    }
+  }
+
+  private async pollOnce(): Promise<void> {
     if (this.isShuttingDown) return;
 
     this.pollInFlight++;

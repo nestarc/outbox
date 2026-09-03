@@ -30,7 +30,7 @@ export class OutboxListener implements OnModuleInit, OnApplicationShutdown {
   constructor(
     @Inject(OUTBOX_OPTIONS) private readonly options: OutboxOptions,
     @Inject(OutboxPoller)
-    private readonly poller: Pick<OutboxPoller, 'poll'>,
+    private readonly poller: Pick<OutboxPoller, 'requestPoll'>,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -59,10 +59,7 @@ export class OutboxListener implements OnModuleInit, OnApplicationShutdown {
     const channel = this.getChannel();
     client.on('notification', (notification) => {
       if (notification.channel !== channel) return;
-      void this.poller.poll().catch((error: unknown) => {
-        const err = error instanceof Error ? error : new Error(String(error));
-        this.logger.warn(`Outbox wakeup poll failed: ${err.message}`);
-      });
+      this.poller.requestPoll();
     });
     client.on('error', (error) => {
       this.logger.warn(`Outbox LISTEN/NOTIFY client error: ${error.message}`);
@@ -111,7 +108,9 @@ export class OutboxListener implements OnModuleInit, OnApplicationShutdown {
       this.reconnectTimer = null;
       void this.connect().catch((error: unknown) => {
         const err = error instanceof Error ? error : new Error(String(error));
-        this.logger.warn(`Outbox LISTEN/NOTIFY reconnect failed: ${err.message}`);
+        this.logger.warn(
+          `Outbox LISTEN/NOTIFY reconnect failed: ${err.message}`,
+        );
         this.scheduleReconnect();
       });
     }, delay);

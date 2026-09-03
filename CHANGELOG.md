@@ -6,6 +6,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Poll interval, PostgreSQL notification, and manual triggers now share a
+  single-flight coordinator. Concurrent triggers are coalesced into at most
+  one queued rerun, background failures are logged without becoming unhandled
+  rejections, and shutdown drops queued work while waiting for the active poll.
+
 ### Changed
 
 - Poller claims now use a private PostgreSQL `claim_token`. Every poller-owned
