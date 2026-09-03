@@ -17,7 +17,6 @@ import {
   DEFAULT_STUCK_THRESHOLD,
   OUTBOX_OPTIONS,
   OUTBOX_TRANSPORT,
-  MAX_SAFE_RETRY_DELAY,
   STUCK_RECOVERY_INTERVAL,
 } from './outbox.constants';
 import type { OutboxHandlerContext } from './interfaces/outbox-handler-context.interface';
@@ -31,12 +30,14 @@ import type { OutboxRecord } from './interfaces/outbox-record.interface';
 import type { OutboxPublisher } from './interfaces/outbox-publisher.interface';
 import type { OutboxTransport } from './interfaces/outbox-transport.interface';
 import { OutboxExplorer } from './outbox.explorer';
+import {
+  type ClaimedOutboxRecord,
+  parseClaimedOutboxRecord,
+  validateDeliveryTransport,
+  validateOutboxOptions,
+} from './outbox-invariants';
 
 const POLL_INTERVAL_NAME = 'outbox-poll';
-
-interface ClaimedOutboxRecord extends OutboxRecord {
-  readonly claimToken: string;
-}
 
 interface LeaseHeartbeat {
   stop(): Promise<boolean>;
@@ -89,6 +90,8 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
     private readonly explorer: OutboxExplorer,
     private readonly schedulerRegistry: SchedulerRegistry,
   ) {
+    validateOutboxOptions(options);
+    validateDeliveryTransport(options, transport);
     this.pollingEnabled = options.polling?.enabled ?? true;
     this.interval = options.polling?.interval ?? DEFAULT_POLLING_INTERVAL;
     this.batchSize = options.polling?.batchSize ?? DEFAULT_BATCH_SIZE;
@@ -106,8 +109,6 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
       options.lease?.heartbeatFailureTolerance ??
       DEFAULT_HEARTBEAT_FAILURE_TOLERANCE;
     this.deliveryMode = options.delivery?.mode ?? 'local';
-    this.validateRetryOptions();
-    this.validateLeaseOptions();
   }
 
   onModuleInit(): void {
@@ -375,7 +376,7 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
     const prisma = this.options.prisma;
     const leaseDurationSeconds = this.leaseDuration / 1000;
 
-    return prisma.$queryRaw`
+    const rows: unknown[] = await prisma.$queryRaw`
       UPDATE outbox_events
       SET status = 'PROCESSING',
           claim_token = gen_random_uuid(),
@@ -416,6 +417,7 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
         claim_token AS "claimToken",
         lease_expires_at AS "leaseExpiresAt"
     `;
+    return rows.map(parseClaimedOutboxRecord);
   }
 
   private async markSent(record: ClaimedOutboxRecord): Promise<boolean> {
@@ -630,55 +632,6 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
     if (recovered > 0) {
       this.logger.warn(
         `Recovered ${recovered} events with expired PROCESSING leases`,
-      );
-    }
-  }
-
-  private validateLeaseOptions(): void {
-    if (!Number.isFinite(this.leaseDuration) || this.leaseDuration <= 0) {
-      throw new Error('Outbox lease.duration must be a positive finite number');
-    }
-    if (
-      !Number.isFinite(this.heartbeatInterval) ||
-      this.heartbeatInterval <= 0 ||
-      this.heartbeatInterval >= this.leaseDuration / 2
-    ) {
-      throw new Error(
-        'Outbox lease.heartbeatInterval must be positive and less than lease.duration / 2',
-      );
-    }
-    if (
-      !Number.isInteger(this.heartbeatFailureTolerance) ||
-      this.heartbeatFailureTolerance < 0
-    ) {
-      throw new Error(
-        'Outbox lease.heartbeatFailureTolerance must be a non-negative integer',
-      );
-    }
-  }
-
-  private validateRetryOptions(): void {
-    if (
-      !Number.isSafeInteger(this.initialDelay) ||
-      this.initialDelay < 0 ||
-      this.initialDelay > MAX_SAFE_RETRY_DELAY
-    ) {
-      throw new Error(
-        `Outbox retry.initialDelay must be a non-negative safe integer no greater than ${MAX_SAFE_RETRY_DELAY}`,
-      );
-    }
-    if (
-      !Number.isSafeInteger(this.maxDelay) ||
-      this.maxDelay <= 0 ||
-      this.maxDelay > MAX_SAFE_RETRY_DELAY
-    ) {
-      throw new Error(
-        `Outbox retry.maxDelay must be a positive safe integer no greater than ${MAX_SAFE_RETRY_DELAY}`,
-      );
-    }
-    if (this.initialDelay > this.maxDelay) {
-      throw new Error(
-        'Outbox retry.initialDelay must be less than or equal to retry.maxDelay',
       );
     }
   }

@@ -179,7 +179,7 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 |    8 | `OUT-M07`      | P1       | `DONE`     | M    | `OUT-M06`, `OUT-M08`                                                                 | privileged/tenant-safe admin 경계                                   |
 |    9 | `OUT-M08`      | P1       | `DONE`     | M    | `OUT-M01–02`, `OUT-M05`                                                              | admin 상태 전이 CAS                                                 |
 |   10 | `OUT-M09`      | P1       | `DONE`     | M    | `OUT-M03`                                                                            | LISTEN/NOTIFY degrade/reconnect lifecycle                           |
-|   11 | `OUT-M10`      | P1       | `READY`    | M    | 없음                                                                                 | runtime option/state invariant validation                           |
+|   11 | `OUT-M10`      | P1       | `DONE`     | M    | 없음                                                                                 | runtime option/state invariant validation                           |
 |   12 | `OUT-M11`      | P1       | `READY`    | M    | 없음                                                                                 | `forRootAsync` DI와 async option 계약                               |
 |   13 | `OUT-M12`      | P1       | `READY`    | M    | 없음                                                                                 | release authorization, least privilege, immutable actions           |
 |   14 | `OUT-M13`      | P1       | `READY`    | M    | 없음                                                                                 | Prisma 5 지원 선언 증거 복구                                        |
@@ -423,15 +423,15 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 
 ### `OUT-M10` — runtime option과 persisted invariant validation
 
-- 상태: `P1 / READY`
+- 상태: `P1 / DONE`
 
 완료 조건:
 
-- [ ] interval, batch, retry count, initial delay, threshold, reconnect delay를 finite/safe integer/range로 검증한다.
-- [ ] delivery mode, polling/wakeup/transport 조합을 module init에서 검증한다.
-- [ ] invalid negative threshold가 active row를 회수할 수 없다.
-- [ ] persisted status/retry/date/JSON 손상은 fail-closed하고 진단 가능한 오류를 낸다.
-- [ ] 가능한 invariant는 additive DB CHECK와 runtime test 양쪽에 둔다.
+- [x] interval, batch, retry count, initial delay, threshold, reconnect delay를 finite/safe integer/range로 검증한다.
+- [x] delivery mode, polling/wakeup/transport 조합을 module init에서 검증한다.
+- [x] invalid negative threshold가 active row를 회수할 수 없다.
+- [x] persisted status/retry/date/JSON 손상은 fail-closed하고 진단 가능한 오류를 낸다.
+- [x] 가능한 invariant는 additive DB CHECK와 runtime test 양쪽에 둔다.
 
 검증: 프로필 A/B/D.
 
@@ -748,6 +748,7 @@ Outbox ── durable record / publisher callback ──> Jobs adapter ──> J
 | 2026-09-03 | `OUT-M08`   | `DONE` | `01f3fcd`                                        | unit 134; PostgreSQL E2E 25; packed Prisma 7 consumer; lint/typecheck/clean build PASS          | local main merge `707eb59` 완료; `OUT-M07` 진행                        |
 | 2026-09-03 | `OUT-M07`   | `DONE` | `4097583`                                        | unit 145; PostgreSQL E2E 26; packed Prisma 7 consumer; lint/typecheck/build PASS                | local main merge 완료; 다음 `READY` P1인 `OUT-M09` 진행                |
 | 2026-09-03 | `OUT-M09`   | `DONE` | `codex/out-m09-listener-lifecycle` working tree  | unit 155; PostgreSQL E2E 26; packed Prisma 7 consumer; lint/typecheck/clean build PASS          | 변경 review 후 commit/push/PR하고 다음 `READY` P1인 `OUT-M10` 진행     |
+| 2026-09-03 | `OUT-M10`   | `DONE` | `codex/out-m10-runtime-invariants` working tree  | unit 170; PostgreSQL E2E 27; packed Prisma 7 consumer; lint/typecheck/clean build PASS          | 변경 review 후 commit/push/PR하고 다음 `READY` P1인 `OUT-M11` 진행     |
 
 ### `OUT-M01` 종료 인계
 
@@ -897,4 +898,19 @@ Unverified paths and reason: 실제 PostgreSQL server 강제 disconnect/notifica
 External PR, run, release evidence: 없음. 최종 tree는 local disposable compose project outbox-out-m09-final-20260903에서 검증하고 종료했으며 commit/push/PR/release는 수행하지 않았다.
 Remaining risk: polling disabled 구성은 LISTEN 연결이 런타임에 끊긴 동안 delivery가 reconnect까지 지연된다. custom client의 end()가 영구 미완료면 안전한 교체/shutdown도 그 transport promise를 기다린다. notification loss/fallback의 실제 PostgreSQL 장애 주입은 OUT-M20B가 소유한다.
 Next exact action: diff를 review한 뒤 OUT-M09 파일만 commit/push/PR하고, 다음 최저 미완료 P1인 OUT-M10 runtime option/state invariant validation을 진행한다.
+```
+
+### `OUT-M10` 종료 인계
+
+```text
+Task: OUT-M10
+State: DONE
+Start ref / end ref: local main@3e8788db870fd87ff2501bd0948a2ac8bc0284f2 / codex/out-m10-runtime-invariants working tree (uncommitted)
+Changed files: sync/async runtime option validator와 typed configuration/persisted-invariant errors, delivery transport validation, poller/admin persisted row parser, fresh/upgrade CHECK SQL, unit/PostgreSQL fixtures, README/CHANGELOG, ADR 0006, maintenance plan
+Contract / semver decision: polling.interval은 1..2147483647, batchSize는 1..10000, maxRetries는 PostgreSQL positive INT, retry/lease/reconnect timer 값은 setTimeout-compatible safe integer로 제한한다. publisher mode는 기본 LocalTransport를 거부하고 publish 또는 explicit legacy dispatch transport를 요구한다. poller/admin row는 status/retry/date/JSON shape를 검증하며 위반 시 event/field가 포함된 OUTBOX_PERSISTED_INVARIANT_VIOLATION으로 fail-closed한다. fresh/upgrade schema는 retry count/limit, payload/headers object, non-PROCESSING claim metadata CHECK를 적용한다. additive public errors와 stricter startup/schema contract이므로 누적 변경과 같은 next pre-1.0 minor 대상으로 결정했다.
+Commands and exact results: 첫 RED focused module/poller 11 FAIL/56 PASS(음수 stuckThreshold는 선행 lease validation으로 이미 PASS); 구현 뒤 full unit 9 suites/170 tests PASS; PostgreSQL 첫 sandbox 실행은 loopback EPERM, 권한 있는 실제 첫 실행은 새 CHECK가 불완전한 stale-transition fixture와 mode 누락을 검출해 4 FAIL/23 PASS, fixture를 유효한 상태 전이로 정정한 최종 PostgreSQL 16 E2E 1 suite/27 tests PASS; strict packed Nest 11.2.1/Prisma 7.10.0 install/typecheck/build/PostgreSQL smoke PASS (sha512-MmJmTzM5UOEpKomug3qvKcQCv8LHAnbU79R8KpYivIxHbTe4vs5pR+/IhhC8fmnURisccLebwFrXGhmT2VL+vg==); npm pack --dry-run 117 files/54.4 kB PASS; lint, build typecheck, clean build, scoped Prettier, git diff --check PASS
+Unverified paths and reason: 원격 GitHub Actions는 push 전이므로 미실행이다. OUT-M19가 소유한 historical v0.1/v0.2 통합 schema 진단/upgrade matrix는 중복 실행하지 않았다.
+External PR, run, release evidence: 없음. local disposable compose project outbox-out-m10-20260903과 branch-local packed tarball로 검증했으며 commit/push/PR/release는 수행하지 않았다.
+Remaining risk: invariant upgrade는 기존 테이블을 검증하고 CHECK 재적용 동안 lock을 획득하므로 큰 production table은 maintenance window와 사전 corruption query가 필요하다. runtime fail-closed는 손상 row를 자동 수리하거나 격리하지 않으며 OUT-M19가 schema version/diagnostic 경로를 보강한다.
+Next exact action: diff를 review한 뒤 OUT-M10 파일만 commit/push/PR하고, 다음 최저 미완료 P1인 OUT-M11 forRootAsync DI와 option ownership을 진행한다.
 ```

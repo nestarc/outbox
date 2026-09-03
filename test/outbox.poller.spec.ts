@@ -168,6 +168,32 @@ describe('OutboxPoller', () => {
   });
 
   describe('poll', () => {
+    it.each([
+      ['status', { status: 'CORRUPT' }],
+      ['retry count', { retryCount: -1 }],
+      ['created date', { createdAt: new Date('invalid') }],
+      ['payload JSON object', { payload: [] }],
+      ['headers JSON object', { headers: [] }],
+    ])(
+      'fails closed before delivery when persisted %s is corrupt',
+      async (_label, corrupt) => {
+        const record = createRecord(corrupt as Partial<ClaimedRecordFixture>);
+        const prisma = createMockPrisma([record]);
+        const publisher = { publish: jest.fn().mockResolvedValue(undefined) };
+        const poller = createPoller({
+          prisma,
+          transport: publisher,
+          options: {
+            polling: { enabled: false, batchSize: 1 },
+            delivery: { mode: 'publisher' },
+          },
+        });
+
+        await expect(poller.poll()).rejects.toThrow(/persisted/i);
+        expect(publisher.publish).not.toHaveBeenCalled();
+      },
+    );
+
     it('claims on demand up to the configured batch size', async () => {
       const firstRecord = createRecord({
         id: 'evt-1',

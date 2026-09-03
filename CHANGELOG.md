@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Runtime options from both `forRoot()` and `forRootAsync()` are now validated
+  as bounded safe integers and supported enum/transport combinations before
+  startup. Invalid configuration throws the typed
+  `OutboxConfigurationError`; polling-disabled configurations still require a
+  usable wakeup path at module initialization.
+- Poller and admin reads now fail closed with the typed
+  `OutboxPersistedInvariantError` when stored status, retry counters, dates, or
+  JSON object shapes are corrupt, so malformed records cannot reach delivery
+  callbacks or be exposed as valid admin records.
 - PostgreSQL wakeup initialization now degrades to polling after client,
   connection, or `LISTEN` failures. Reconnect uses capped exponential backoff,
   generation-fences stale callbacks, detaches supported listeners, closes the
@@ -66,6 +75,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Testing
 
+- Unit contracts cover invalid sync/async runtime configuration, delivery
+  transport mismatches, and corrupt persisted rows. PostgreSQL E2E verifies the
+  new retry, JSON-object, and non-processing-claim CHECK constraints and their
+  idempotent upgrade.
 - PostgreSQL E2E now gates concurrent two-poller initial claims, active lease
   heartbeats, expired-lease recovery, stale completions, publisher acceptance
   before `SENT` process loss, and notification/poll fallback coalescing. The
@@ -76,9 +89,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Existing 0.2.x databases must apply
   `src/sql/upgrade-add-claim-token.sql`, `src/sql/upgrade-add-lease.sql`, and
-  `src/sql/upgrade-add-next-attempt-at.sql` before deploying this runtime. The
+  `src/sql/upgrade-add-next-attempt-at.sql`, followed by
+  `src/sql/upgrade-add-invariants.sql`, before deploying this runtime. The
   additive nullable columns and partial indexes are safe to apply more than
-  once. The retry upgrade makes existing pending/processing retries due at
+  once. The invariant upgrade is idempotent but validates the existing table
+  and intentionally fails on corrupt rows. The retry upgrade makes existing pending/processing retries due at
   migration time and rebuilds the pending index around `next_attempt_at`.
   Legacy `PROCESSING` rows with a null lease retain the configured duration as
   their recovery threshold. Drain 0.2.x pollers before starting the new runtime

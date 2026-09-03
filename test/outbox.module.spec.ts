@@ -26,6 +26,93 @@ class MockPrismaService {
 }
 
 describe('OutboxModule', () => {
+  describe('runtime option validation', () => {
+    it.each([
+      ['negative stuckThreshold', { stuckThreshold: -1 }],
+      ['zero batch size', { polling: { enabled: true, batchSize: 0 } }],
+      ['NaN polling interval', { polling: { enabled: true, interval: NaN } }],
+      ['zero max retries', { retry: { maxRetries: 0 } }],
+      ['non-object retry options', { retry: 'invalid' }],
+      [
+        'negative reconnect delay',
+        {
+          wakeup: { enabled: true, reconnectDelay: -1 },
+        },
+      ],
+    ])('rejects %s during module compilation', async (_label, invalid) => {
+      await expect(
+        Test.createTestingModule({
+          imports: [
+            OutboxModule.forRoot({
+              prisma: mockPrisma,
+              polling: { enabled: false },
+              ...invalid,
+            } as unknown as OutboxOptions),
+          ],
+        }).compile(),
+      ).rejects.toThrow(/Outbox/);
+    });
+
+    it('validates options returned by an async factory', async () => {
+      await expect(
+        Test.createTestingModule({
+          imports: [
+            OutboxModule.forRootAsync({
+              useFactory: () => ({
+                prisma: mockPrisma,
+                polling: { enabled: true, interval: Number.POSITIVE_INFINITY },
+              }),
+            }),
+          ],
+        }).compile(),
+      ).rejects.toThrow(/Outbox/);
+    });
+
+    it('rejects an unknown delivery mode at runtime', async () => {
+      await expect(
+        Test.createTestingModule({
+          imports: [
+            OutboxModule.forRoot({
+              prisma: mockPrisma,
+              delivery: { mode: 'unknown' as 'local' },
+            }),
+          ],
+        }).compile(),
+      ).rejects.toThrow(/delivery\.mode/);
+    });
+
+    it('fails module initialization when polling and wakeup are both disabled', async () => {
+      const module = await Test.createTestingModule({
+        imports: [
+          OutboxModule.forRoot({
+            prisma: mockPrisma,
+            polling: { enabled: false },
+            wakeup: { enabled: false },
+          }),
+        ],
+      }).compile();
+
+      await expect(module.init()).rejects.toMatchObject({
+        code: 'OUTBOX_WAKEUP_UNAVAILABLE',
+      });
+    });
+
+    it('rejects a publisher mode backed by the default local transport', async () => {
+      await expect(
+        Test.createTestingModule({
+          imports: [
+            OutboxModule.forRoot({
+              prisma: mockPrisma,
+              polling: { enabled: false },
+              wakeup: { enabled: true, clientFactory: () => null },
+              delivery: { mode: 'publisher' },
+            }),
+          ],
+        }).compile(),
+      ).rejects.toThrow(/publisher/);
+    });
+  });
+
   describe('forRoot', () => {
     it('should resolve prisma class reference via DI', async () => {
       @Global()

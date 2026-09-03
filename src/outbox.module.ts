@@ -26,6 +26,7 @@ import type {
   OutboxOptionsFactory,
 } from './interfaces/outbox-options.interface';
 import type { OutboxTenantProvider } from './interfaces/outbox-tenancy.interface';
+import { validateOutboxOptions } from './outbox-invariants';
 
 @Module({})
 export class OutboxModule {
@@ -37,14 +38,15 @@ export class OutboxModule {
       ? {
           provide: OUTBOX_OPTIONS,
           inject: [prismaRef],
-          useFactory: (prismaInstance: any): OutboxOptions => ({
-            ...options,
-            prisma: prismaInstance,
-          }),
+          useFactory: (prismaInstance: any): OutboxOptions =>
+            validateOutboxOptions({
+              ...options,
+              prisma: prismaInstance,
+            }),
         }
       : {
           provide: OUTBOX_OPTIONS,
-          useValue: options,
+          useFactory: (): OutboxOptions => validateOutboxOptions(options),
         };
 
     const transportProvider: Provider = {
@@ -161,7 +163,8 @@ export class OutboxModule {
       return [
         {
           provide: OUTBOX_OPTIONS,
-          useFactory: options.useFactory,
+          useFactory: async (...args: any[]): Promise<OutboxOptions> =>
+            validateOutboxOptions(await options.useFactory!(...args)),
           inject: options.inject ?? [],
         },
       ];
@@ -171,8 +174,10 @@ export class OutboxModule {
       return [
         {
           provide: OUTBOX_OPTIONS,
-          useFactory: (factory: OutboxOptionsFactory) =>
-            factory.createOutboxOptions(),
+          useFactory: async (
+            factory: OutboxOptionsFactory,
+          ): Promise<OutboxOptions> =>
+            validateOutboxOptions(await factory.createOutboxOptions()),
           inject: [options.useExisting],
         },
       ];
@@ -184,8 +189,10 @@ export class OutboxModule {
         { provide: useClass, useClass },
         {
           provide: OUTBOX_OPTIONS,
-          useFactory: (factory: OutboxOptionsFactory) =>
-            factory.createOutboxOptions(),
+          useFactory: async (
+            factory: OutboxOptionsFactory,
+          ): Promise<OutboxOptions> =>
+            validateOutboxOptions(await factory.createOutboxOptions()),
           inject: [useClass],
         },
       ];
