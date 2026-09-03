@@ -156,6 +156,13 @@ For an existing 0.1.x install, apply the additive upgrade file:
 psql "$DATABASE_URL" -f "$(node -e "console.log(require.resolve('@nestarc/outbox/src/sql/upgrade-0.1-to-0.2.sql'))")"
 ```
 
+Existing 0.2.x installations must also apply the idempotent claim-fencing
+upgrade before running a version that uses claim tokens:
+
+```bash
+psql "$DATABASE_URL" -f "$(node -e "console.log(require.resolve('@nestarc/outbox/src/sql/upgrade-add-claim-token.sql'))")"
+```
+
 <details>
 <summary>View the full SQL</summary>
 
@@ -180,6 +187,7 @@ CREATE TABLE IF NOT EXISTS outbox_events (
   causation_id   VARCHAR(255),
   headers       JSONB NOT NULL DEFAULT '{}'::jsonb,
   occurred_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  claim_token   UUID,
 
   CONSTRAINT chk_status CHECK (status IN ('PENDING', 'PROCESSING', 'SENT', 'FAILED'))
 );
@@ -192,6 +200,10 @@ CREATE INDEX IF NOT EXISTS idx_outbox_pending
 -- PROCESSING events: stuck event recovery checks updated_at
 CREATE INDEX IF NOT EXISTS idx_outbox_processing
   ON outbox_events (updated_at ASC)
+  WHERE status = 'PROCESSING';
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_outbox_processing_claim_token
+  ON outbox_events (claim_token)
   WHERE status = 'PROCESSING';
 
 -- FAILED events: admin/monitoring queries

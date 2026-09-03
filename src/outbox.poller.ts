@@ -31,6 +31,13 @@ import { OutboxExplorer } from './outbox.explorer';
 
 const POLL_INTERVAL_NAME = 'outbox-poll';
 
+interface ClaimedOutboxRecord extends OutboxRecord {
+  readonly claimToken: string;
+}
+
+type DispatchResult = 'dispatched' | 'terminal' | 'lost-claim';
+type FailureTransition = 'retry' | 'dead-letter' | 'lost-claim';
+
 function hasPublish(transport: unknown): transport is OutboxPublisher {
   return (
     typeof transport === 'object' &&
@@ -135,27 +142,40 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
         if (this.isShuttingDown) break;
 
         this.activeCount++;
-        const dispatchContext = this.createDispatchContext(record);
         const startedAt = Date.now();
         try {
-          await this.runHook('onDispatchStart', dispatchContext);
+          await this.runHook(
+            'onDispatchStart',
+            this.createDispatchContext(record),
+          );
           const dispatched = await this.dispatchRecord(record);
-          if (dispatched) {
-            await this.markSent(record.id);
+          if (dispatched === 'dispatched' && (await this.markSent(record))) {
             await this.runHook('onDispatchSuccess', {
-              ...dispatchContext,
+              ...this.createDispatchContext(record),
               durationMs: Date.now() - startedAt,
             });
           }
         } catch (error) {
-          const err =
-            error instanceof Error ? error : new Error(String(error));
-          await this.runHook('onDispatchFailure', {
-            ...dispatchContext,
-            error: err,
-            durationMs: Date.now() - startedAt,
-          });
-          await this.handleFailure(record, err);
+          const err = error instanceof Error ? error : new Error(String(error));
+          const transition = await this.handleFailure(record, err);
+          if (transition !== 'lost-claim') {
+            await this.runHook('onDispatchFailure', {
+              ...this.createDispatchContext(record),
+              error: err,
+              durationMs: Date.now() - startedAt,
+            });
+            const retryContext = this.createRetryContext(
+              record,
+              err,
+              record.retryCount + 1,
+            );
+            await this.runHook(
+              transition === 'dead-letter'
+                ? 'onDeadLetter'
+                : 'onRetryScheduled',
+              retryContext,
+            );
+          }
         } finally {
           this.activeCount--;
         }
@@ -165,16 +185,18 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
     }
   }
 
-  private async dispatchRecord(record: OutboxRecord): Promise<boolean> {
+  private async dispatchRecord(
+    record: ClaimedOutboxRecord,
+  ): Promise<DispatchResult> {
     if (this.deliveryMode === 'publisher') {
       if (hasPublish(this.transport)) {
-        await this.transport.publish(record);
-        return true;
+        await this.transport.publish(this.createRecordSnapshot(record));
+        return 'dispatched';
       }
 
       if (hasDispatch(this.transport)) {
-        await this.transport.dispatch(record, []);
-        return true;
+        await this.transport.dispatch(this.createRecordSnapshot(record), []);
+        return 'dispatched';
       }
 
       throw new Error(
@@ -185,14 +207,18 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
     const handlers = this.explorer.getHandlers(record.eventType);
 
     if (handlers.length === 0) {
-      this.logger.error(
-        `No handlers for event type "${record.eventType}", marking as FAILED`,
-      );
-      await this.markFailed(
-        record.id,
-        `No registered handlers for event type "${record.eventType}"`,
-      );
-      return false;
+      const errorMessage = `No registered handlers for event type "${record.eventType}"`;
+      const transitioned = await this.markFailed(record, errorMessage);
+      if (transitioned) {
+        this.logger.error(
+          `No handlers for event type "${record.eventType}", marked as FAILED`,
+        );
+      } else {
+        this.logger.warn(
+          `Lost claim for event ${record.id} before marking it as FAILED`,
+        );
+      }
+      return transitioned ? 'terminal' : 'lost-claim';
     }
 
     if (!hasDispatch(this.transport)) {
@@ -201,15 +227,17 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
       );
     }
 
+    const dispatchRecord = this.createRecordSnapshot(record);
+    const contextRecord = this.createRecordSnapshot(record);
     await this.transport.dispatch(
-      record,
+      dispatchRecord,
       handlers,
-      this.createHandlerContext(record),
+      this.createHandlerContext(contextRecord),
     );
-    return true;
+    return 'dispatched';
   }
 
-  private async fetchAndLock(): Promise<OutboxRecord[]> {
+  private async fetchAndLock(): Promise<ClaimedOutboxRecord[]> {
     const prisma = this.options.prisma;
     const backoffType = this.backoff;
     const initialDelaySeconds = this.initialDelay / 1000;
@@ -217,7 +245,9 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
 
     return prisma.$queryRaw`
       UPDATE outbox_events
-      SET status = 'PROCESSING', updated_at = NOW()
+      SET status = 'PROCESSING',
+          claim_token = gen_random_uuid(),
+          updated_at = NOW()
       WHERE id IN (
         SELECT id FROM outbox_events
         WHERE status = 'PENDING'
@@ -254,70 +284,101 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
         correlation_id AS "correlationId",
         causation_id AS "causationId",
         headers,
-        occurred_at AS "occurredAt"
+        occurred_at AS "occurredAt",
+        claim_token AS "claimToken"
     `;
   }
 
-  private async markSent(id: string): Promise<void> {
+  private async markSent(record: ClaimedOutboxRecord): Promise<boolean> {
     const prisma = this.options.prisma;
-    await prisma.$executeRaw`
+    const updated = await prisma.$executeRaw`
       UPDATE outbox_events
-      SET status = 'SENT', processed_at = NOW(), updated_at = NOW()
-      WHERE id = ${id}::uuid
+      SET status = 'SENT',
+          claim_token = NULL,
+          processed_at = NOW(),
+          updated_at = NOW()
+      WHERE id = ${record.id}::uuid
+        AND status = 'PROCESSING'
+        AND claim_token = ${record.claimToken}::uuid
     `;
+    if (updated === 0) {
+      this.logger.warn(
+        `Lost claim for event ${record.id} before marking it as SENT`,
+      );
+    }
+    return updated === 1;
   }
 
-  private async markFailed(id: string, errorMessage: string): Promise<void> {
+  private async markFailed(
+    record: ClaimedOutboxRecord,
+    errorMessage: string,
+  ): Promise<boolean> {
     const prisma = this.options.prisma;
-    await prisma.$executeRaw`
+    const updated = await prisma.$executeRaw`
       UPDATE outbox_events
       SET status = 'FAILED',
+          claim_token = NULL,
           last_error = ${errorMessage},
           updated_at = NOW()
-      WHERE id = ${id}::uuid
+      WHERE id = ${record.id}::uuid
+        AND status = 'PROCESSING'
+        AND claim_token = ${record.claimToken}::uuid
     `;
+    return updated === 1;
   }
 
   private async handleFailure(
-    record: OutboxRecord,
+    record: ClaimedOutboxRecord,
     error: Error,
-  ): Promise<void> {
+  ): Promise<FailureTransition> {
     const newRetryCount = record.retryCount + 1;
     const prisma = this.options.prisma;
     const errorMessage = error.message;
 
     if (newRetryCount >= record.maxRetries) {
+      const updated = await prisma.$executeRaw`
+        UPDATE outbox_events
+        SET status = 'FAILED',
+            claim_token = NULL,
+            retry_count = ${newRetryCount},
+            last_error = ${errorMessage},
+            updated_at = NOW()
+        WHERE id = ${record.id}::uuid
+          AND status = 'PROCESSING'
+          AND claim_token = ${record.claimToken}::uuid
+      `;
+      if (updated === 0) {
+        this.logger.warn(
+          `Lost claim for event ${record.id} before marking it as FAILED`,
+        );
+        return 'lost-claim';
+      }
       this.logger.error(
         `Event ${record.id} failed permanently after ${newRetryCount} retries: ${errorMessage}`,
       );
-      await prisma.$executeRaw`
+      return 'dead-letter';
+    } else {
+      const updated = await prisma.$executeRaw`
         UPDATE outbox_events
-        SET status = 'FAILED',
+        SET status = 'PENDING',
+            claim_token = NULL,
             retry_count = ${newRetryCount},
             last_error = ${errorMessage},
             updated_at = NOW()
         WHERE id = ${record.id}::uuid
+          AND status = 'PROCESSING'
+          AND claim_token = ${record.claimToken}::uuid
       `;
-      await this.runHook(
-        'onDeadLetter',
-        this.createRetryContext(record, error, newRetryCount),
-      );
-    } else {
+      if (updated === 0) {
+        this.logger.warn(
+          `Lost claim for event ${record.id} before scheduling retry ${newRetryCount}`,
+        );
+        return 'lost-claim';
+      }
       this.logger.warn(
         `Event ${record.id} failed (retry ${newRetryCount}/${record.maxRetries}): ${errorMessage}`,
       );
-      await prisma.$executeRaw`
-        UPDATE outbox_events
-        SET status = 'PENDING',
-            retry_count = ${newRetryCount},
-            last_error = ${errorMessage},
-            updated_at = NOW()
-        WHERE id = ${record.id}::uuid
-      `;
-      await this.runHook(
-        'onRetryScheduled',
-        this.createRetryContext(record, error, newRetryCount),
-      );
+      return 'retry';
     }
   }
 
@@ -327,7 +388,7 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
 
     const recovered = await prisma.$executeRaw`
       UPDATE outbox_events
-      SET status = 'PENDING', updated_at = NOW()
+      SET status = 'PENDING', claim_token = NULL, updated_at = NOW()
       WHERE status = 'PROCESSING'
         AND updated_at < NOW() - make_interval(secs => ${thresholdSeconds})
     `;
@@ -350,26 +411,29 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
     };
   }
 
-  private createDispatchContext(record: OutboxRecord): OutboxDispatchContext {
+  private createDispatchContext(
+    record: ClaimedOutboxRecord,
+  ): OutboxDispatchContext {
+    const snapshot = this.createRecordSnapshot(record);
     return {
-      record,
-      eventId: record.id,
-      eventType: record.eventType,
-      tenantId: record.tenantId,
-      retryCount: record.retryCount,
-      maxRetries: record.maxRetries,
-      aggregateType: record.aggregateType,
-      aggregateId: record.aggregateId,
-      partitionKey: record.partitionKey,
-      idempotencyKey: record.idempotencyKey,
-      correlationId: record.correlationId,
-      causationId: record.causationId,
-      headers: record.headers,
+      record: snapshot,
+      eventId: snapshot.id,
+      eventType: snapshot.eventType,
+      tenantId: snapshot.tenantId,
+      retryCount: snapshot.retryCount,
+      maxRetries: snapshot.maxRetries,
+      aggregateType: snapshot.aggregateType,
+      aggregateId: snapshot.aggregateId,
+      partitionKey: snapshot.partitionKey,
+      idempotencyKey: snapshot.idempotencyKey,
+      correlationId: snapshot.correlationId,
+      causationId: snapshot.causationId,
+      headers: snapshot.headers,
     };
   }
 
   private createRetryContext(
-    record: OutboxRecord,
+    record: ClaimedOutboxRecord,
     error: Error,
     retryCount: number,
   ): OutboxRetryContext {
@@ -379,6 +443,30 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
       retryCount,
       maxRetries: record.maxRetries,
     };
+  }
+
+  private createRecordSnapshot(record: ClaimedOutboxRecord): OutboxRecord {
+    return structuredClone({
+      id: record.id,
+      eventType: record.eventType,
+      payload: record.payload,
+      status: record.status,
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
+      processedAt: record.processedAt,
+      retryCount: record.retryCount,
+      maxRetries: record.maxRetries,
+      lastError: record.lastError,
+      tenantId: record.tenantId,
+      aggregateType: record.aggregateType,
+      aggregateId: record.aggregateId,
+      partitionKey: record.partitionKey,
+      idempotencyKey: record.idempotencyKey,
+      correlationId: record.correlationId,
+      causationId: record.causationId,
+      headers: record.headers,
+      occurredAt: record.occurredAt,
+    });
   }
 
   private async runHook<K extends keyof OutboxHooks>(

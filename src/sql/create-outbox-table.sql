@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS outbox_events (
   causation_id   VARCHAR(255),
   headers       JSONB NOT NULL DEFAULT '{}'::jsonb,
   occurred_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  claim_token   UUID,
 
   CONSTRAINT chk_status CHECK (status IN ('PENDING', 'PROCESSING', 'SENT', 'FAILED'))
 );
@@ -30,6 +31,11 @@ CREATE INDEX IF NOT EXISTS idx_outbox_pending
 -- PROCESSING events: stuck event recovery checks updated_at
 CREATE INDEX IF NOT EXISTS idx_outbox_processing
   ON outbox_events (updated_at ASC)
+  WHERE status = 'PROCESSING';
+
+-- Active claim fencing: a token belongs to at most one PROCESSING row
+CREATE UNIQUE INDEX IF NOT EXISTS idx_outbox_processing_claim_token
+  ON outbox_events (claim_token)
   WHERE status = 'PROCESSING';
 
 -- FAILED events: admin/monitoring queries

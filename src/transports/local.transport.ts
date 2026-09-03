@@ -21,7 +21,16 @@ export class LocalTransport implements OutboxTransport {
   ): Promise<void> {
     const runHandlers = async () => {
       for (const handler of handlers) {
-        await handler.instance[handler.methodName](record.payload, context);
+        const handlerRecord = structuredClone(record);
+        const handlerContext: OutboxHandlerContext = {
+          ...structuredClone(context),
+          record: handlerRecord,
+          headers: handlerRecord.headers,
+        };
+        await handler.instance[handler.methodName](
+          handlerRecord.payload,
+          handlerContext,
+        );
       }
     };
 

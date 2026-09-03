@@ -4,6 +4,29 @@ All notable changes to `@nestarc/outbox` are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Poller claims now use a private PostgreSQL `claim_token`. Every poller-owned
+  `SENT`, retry, and `FAILED` transition compares the event id, `PROCESSING`
+  status, and token; a zero-row compare-and-set is treated as a lost claim and
+  does not emit success, failure, retry, or dead-letter hooks.
+- Publishers, hooks, and local handlers receive detached deep snapshots.
+  `OutboxRecord`, dispatch contexts, and handler contexts now expose readonly
+  properties at compile time. Runtime freezing is intentionally not part of
+  the contract.
+
+### Migration
+
+- Existing 0.2.x databases must apply
+  `src/sql/upgrade-add-claim-token.sql` before deploying this runtime. The
+  additive nullable column and partial unique index are safe to apply more than
+  once.
+- Because the required schema migration and readonly public type tightening
+  affect consumers, this change is targeted at the next pre-1.0 minor release
+  rather than a patch release.
+
 ## [0.2.1] — 2026-08-30
 
 ### Changed

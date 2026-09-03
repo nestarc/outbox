@@ -7,8 +7,10 @@ import { OutboxModule } from '../../src/outbox.module';
 import { OutboxAdminService } from '../../src/outbox.admin.service';
 import { OutboxEmitter } from '../../src/outbox.emitter';
 import { OutboxEvent } from '../../src/outbox.event';
+import { OutboxPoller } from '../../src/outbox.poller';
 import { OnOutboxEvent } from '../../src/outbox.decorator';
 import type { OutboxHandlerContext } from '../../src/interfaces/outbox-handler-context.interface';
+import type { OutboxRecord } from '../../src/interfaces/outbox-record.interface';
 
 // --- Test event ---
 class OrderCreatedEvent extends OutboxEvent {
@@ -78,6 +80,18 @@ const MIGRATION_STATEMENTS = MIGRATION_SQL_FILE.replace(/^\s*--.*$/gm, '')
   .map((s) => s.trim())
   .filter((s) => s.length > 0);
 
+const CLAIM_TOKEN_UPGRADE_SQL_FILE = fs.readFileSync(
+  path.join(__dirname, '../../src/sql/upgrade-add-claim-token.sql'),
+  'utf-8',
+);
+const CLAIM_TOKEN_UPGRADE_STATEMENTS = CLAIM_TOKEN_UPGRADE_SQL_FILE.replace(
+  /^\s*--.*$/gm,
+  '',
+)
+  .split(';')
+  .map((s) => s.trim())
+  .filter((s) => s.length > 0);
+
 async function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -91,7 +105,13 @@ describe('Outbox E2E', () => {
       'postgresql://test:test@localhost:5433/outbox_test';
     const prismaVersion = JSON.parse(
       fs.readFileSync(
-        path.join(process.cwd(), 'node_modules', '@prisma', 'client', 'package.json'),
+        path.join(
+          process.cwd(),
+          'node_modules',
+          '@prisma',
+          'client',
+          'package.json',
+        ),
         'utf8',
       ),
     ).version as string;
@@ -106,11 +126,10 @@ describe('Outbox E2E', () => {
       });
     } else {
       process.env.DATABASE_URL = connectionString;
-      const { PrismaClient: LegacyPrismaClient } = (await import(
-        '@prisma/client'
-      )) as unknown as {
-        PrismaClient: new () => any;
-      };
+      const { PrismaClient: LegacyPrismaClient } =
+        (await import('@prisma/client')) as unknown as {
+          PrismaClient: new () => any;
+        };
       prisma = new LegacyPrismaClient();
     }
     await prisma.$connect();
@@ -137,20 +156,198 @@ describe('Outbox E2E', () => {
     `;
 
     expect(
-      indexes
-        .map((row: { indexname: string }) => row.indexname)
-        .sort(),
+      indexes.map((row: { indexname: string }) => row.indexname).sort(),
     ).toEqual(
       expect.arrayContaining([
         'idx_outbox_aggregate',
         'idx_outbox_failed',
         'idx_outbox_pending',
         'idx_outbox_processing',
+        'idx_outbox_processing_claim_token',
         'idx_outbox_tenant_pending',
         'outbox_events_pkey',
       ]),
     );
   });
+
+  it('upgrades a current table with the claim token fence idempotently', async () => {
+    await prisma.$executeRawUnsafe(
+      'ALTER TABLE outbox_events DROP COLUMN claim_token',
+    );
+
+    for (const statement of CLAIM_TOKEN_UPGRADE_STATEMENTS) {
+      await prisma.$executeRawUnsafe(statement);
+      await prisma.$executeRawUnsafe(statement);
+    }
+
+    const columns = await prisma.$queryRaw<Array<{ dataType: string }>>`
+      SELECT data_type::text AS "dataType"
+      FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = 'outbox_events'
+        AND column_name = 'claim_token'
+    `;
+    const indexes = await prisma.$queryRaw<Array<{ indexname: string }>>`
+      SELECT indexname::text AS indexname
+      FROM pg_indexes
+      WHERE schemaname = current_schema()
+        AND tablename = 'outbox_events'
+        AND indexname = 'idx_outbox_processing_claim_token'
+    `;
+
+    expect(columns).toEqual([{ dataType: 'uuid' }]);
+    expect(indexes).toHaveLength(1);
+  });
+
+  it.each([
+    {
+      name: 'successful dispatch',
+      retryCount: 0,
+      maxRetries: 5,
+      error: undefined,
+    },
+    {
+      name: 'retriable failure',
+      retryCount: 1,
+      maxRetries: 5,
+      error: new Error('retry'),
+    },
+    {
+      name: 'terminal failure',
+      retryCount: 2,
+      maxRetries: 3,
+      error: new Error('dead letter'),
+    },
+  ])(
+    'rejects a stale claim token after $name',
+    async ({ retryCount, maxRetries, error }) => {
+      const replacementToken = '00000000-0000-4000-8000-000000000002';
+      await prisma.$executeRaw`
+        INSERT INTO outbox_events (
+          event_type,
+          payload,
+          retry_count,
+          max_retries,
+          updated_at
+        ) VALUES (
+          'claim.fence',
+          '{}'::jsonb,
+          ${retryCount},
+          ${maxRetries},
+          NOW() - INTERVAL '1 minute'
+        )
+      `;
+      const hooks = {
+        onDispatchSuccess: jest.fn(),
+        onDispatchFailure: jest.fn(),
+        onRetryScheduled: jest.fn(),
+        onDeadLetter: jest.fn(),
+      };
+      const publisher = {
+        publish: jest.fn(async (record: OutboxRecord) => {
+          await prisma.$executeRaw`
+            UPDATE outbox_events
+            SET claim_token = ${replacementToken}::uuid
+            WHERE id = ${record.id}::uuid
+              AND status = 'PROCESSING'
+          `;
+          if (error) throw error;
+        }),
+      };
+      const poller = new OutboxPoller(
+        {
+          prisma,
+          polling: { enabled: false, batchSize: 1 },
+          retry: { backoff: 'fixed', initialDelay: 0 },
+          delivery: { mode: 'publisher' },
+          hooks,
+        },
+        publisher,
+        { getHandlers: jest.fn() } as any,
+        { addInterval: jest.fn(), deleteInterval: jest.fn() } as any,
+      );
+
+      await poller.poll();
+
+      const rows = await prisma.$queryRaw<
+        Array<{ status: string; claimToken: string; retryCount: number }>
+      >`
+        SELECT
+          status,
+          claim_token::text AS "claimToken",
+          retry_count AS "retryCount"
+        FROM outbox_events
+        WHERE event_type = 'claim.fence'
+      `;
+      expect(rows).toEqual([
+        {
+          status: 'PROCESSING',
+          claimToken: replacementToken,
+          retryCount,
+        },
+      ]);
+      expect(hooks.onDispatchSuccess).not.toHaveBeenCalled();
+      expect(hooks.onDispatchFailure).not.toHaveBeenCalled();
+      expect(hooks.onRetryScheduled).not.toHaveBeenCalled();
+      expect(hooks.onDeadLetter).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { status: 'PENDING', error: undefined },
+    { status: 'SENT', error: undefined },
+    { status: 'FAILED', error: new Error('late failure') },
+  ] as const)(
+    'rejects a poller transition after the claim becomes $status',
+    async ({ status, error }) => {
+      await prisma.$executeRaw`
+        INSERT INTO outbox_events (event_type, payload)
+        VALUES ('claim.illegal-transition', '{}'::jsonb)
+      `;
+      const hooks = {
+        onDispatchSuccess: jest.fn(),
+        onDispatchFailure: jest.fn(),
+        onRetryScheduled: jest.fn(),
+        onDeadLetter: jest.fn(),
+      };
+      const publisher = {
+        publish: jest.fn(async (record: OutboxRecord) => {
+          await prisma.$executeRawUnsafe(
+            `UPDATE outbox_events
+             SET status = $1, claim_token = NULL
+             WHERE id = $2::uuid`,
+            status,
+            record.id,
+          );
+          if (error) throw error;
+        }),
+      };
+      const poller = new OutboxPoller(
+        {
+          prisma,
+          polling: { enabled: false, batchSize: 1 },
+          delivery: { mode: 'publisher' },
+          hooks,
+        },
+        publisher,
+        { getHandlers: jest.fn() } as any,
+        { addInterval: jest.fn(), deleteInterval: jest.fn() } as any,
+      );
+
+      await poller.poll();
+
+      const rows = await prisma.$queryRaw<Array<{ status: string }>>`
+        SELECT status
+        FROM outbox_events
+        WHERE event_type = 'claim.illegal-transition'
+      `;
+      expect(rows).toEqual([{ status }]);
+      expect(hooks.onDispatchSuccess).not.toHaveBeenCalled();
+      expect(hooks.onDispatchFailure).not.toHaveBeenCalled();
+      expect(hooks.onRetryScheduled).not.toHaveBeenCalled();
+      expect(hooks.onDeadLetter).not.toHaveBeenCalled();
+    },
+  );
 
   describe('basic flow', () => {
     let app: INestApplication;
