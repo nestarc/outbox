@@ -178,7 +178,7 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 |    7 | `OUT-M06`      | P1       | `DONE`     | M    | 없음                                                                                 | tenant producer provenance 정책                                     |
 |    8 | `OUT-M07`      | P1       | `DONE`     | M    | `OUT-M06`, `OUT-M08`                                                                 | privileged/tenant-safe admin 경계                                   |
 |    9 | `OUT-M08`      | P1       | `DONE`     | M    | `OUT-M01–02`, `OUT-M05`                                                              | admin 상태 전이 CAS                                                 |
-|   10 | `OUT-M09`      | P1       | `READY`    | M    | `OUT-M03`                                                                            | LISTEN/NOTIFY degrade/reconnect lifecycle                           |
+|   10 | `OUT-M09`      | P1       | `DONE`     | M    | `OUT-M03`                                                                            | LISTEN/NOTIFY degrade/reconnect lifecycle                           |
 |   11 | `OUT-M10`      | P1       | `READY`    | M    | 없음                                                                                 | runtime option/state invariant validation                           |
 |   12 | `OUT-M11`      | P1       | `READY`    | M    | 없음                                                                                 | `forRootAsync` DI와 async option 계약                               |
 |   13 | `OUT-M12`      | P1       | `READY`    | M    | 없음                                                                                 | release authorization, least privilege, immutable actions           |
@@ -191,7 +191,7 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 |   20 | `OUT-M18`      | P2       | `BLOCKED`  | M    | `OUT-M05`, `OUT-M07–08`, `OUT-M17`                                                   | admin pagination/retention/bulk 성능                                |
 |   21 | `OUT-M19`      | P2       | `BLOCKED`  | L    | `OUT-M01–02`, `OUT-M05`, `OUT-M10`                                                   | schema upgrade/diagnostic compatibility                             |
 |  22A | `OUT-M20A`     | P2       | `BLOCKED`  | M    | `OUT-M01`, `OUT-M05–06`, `OUT-M10`                                                   | publisher terminal/tenant-context PostgreSQL E2E                    |
-|  22B | `OUT-M20B`     | P2       | `BLOCKED`  | M    | `OUT-M03`, `OUT-M09`                                                                 | LISTEN/NOTIFY wakeup/fallback PostgreSQL E2E                        |
+|  22B | `OUT-M20B`     | P2       | `READY`    | M    | `OUT-M03`, `OUT-M09`                                                                 | LISTEN/NOTIFY wakeup/fallback PostgreSQL E2E                        |
 |  22C | `OUT-M20C`     | P2       | `BLOCKED`  | M    | `OUT-M02`, `OUT-M05`, `OUT-M19`                                                      | shutdown/retry/upgrade 통합 PostgreSQL E2E                          |
 |   23 | `OUT-M22`      | P2       | `READY`    | M    | 없음                                                                                 | dev dependency audit remediation                                    |
 |   24 | `OUT-M23`      | P2       | `DECISION` | M    | 없음                                                                                 | explicit root/SQL package export 계약                               |
@@ -408,16 +408,16 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 
 ### `OUT-M09` — LISTEN/NOTIFY degrade/reconnect lifecycle
 
-- 상태: `P1 / READY`; 선행 `OUT-M03`
+- 상태: `P1 / DONE`; 선행 `OUT-M03`
 
 완료 조건:
 
-- [ ] optional wakeup 초기 연결 실패는 polling으로 degrade하고 module boot를 막지 않는다.
-- [ ] polling disabled + wakeup unavailable 조합은 stable typed init error로 fail-fast한다.
-- [ ] generation guard로 stale client의 error/end가 새 reconnect를 만들지 않는다.
-- [ ] client 교체 전에 transport가 지원하는 listener 제거와 `end()`를 수행하고, listener 제거 API가 없을 때도 generation guard가 stale callback을 무효화한다.
-- [ ] connect/query/end/error/shutdown-race test가 있다.
-- [ ] reconnect backoff와 observability가 있고 timer가 shutdown 뒤 남지 않는다.
+- [x] optional wakeup 초기 연결 실패는 polling으로 degrade하고 module boot를 막지 않는다.
+- [x] polling disabled + wakeup unavailable 조합은 stable typed init error로 fail-fast한다.
+- [x] generation guard로 stale client의 error/end가 새 reconnect를 만들지 않는다.
+- [x] client 교체 전에 transport가 지원하는 listener 제거와 `end()`를 수행하고, listener 제거 API가 없을 때도 generation guard가 stale callback을 무효화한다.
+- [x] connect/query/end/error/shutdown-race test가 있다.
+- [x] reconnect backoff와 observability가 있고 timer가 shutdown 뒤 남지 않는다.
 
 검증: 프로필 A/B/C.
 
@@ -747,6 +747,7 @@ Outbox ── durable record / publisher callback ──> Jobs adapter ──> J
 | 2026-09-03 | `OUT-M06`   | `DONE` | `codex/out-m06-tenant-provenance` working tree   | unit 129; PostgreSQL E2E 22; packed Prisma 7 consumer; lint/typecheck/clean build PASS          | 변경 review 후 commit/push/PR하고 `OUT-M08` admin 상태 전이 CAS 진행   |
 | 2026-09-03 | `OUT-M08`   | `DONE` | `01f3fcd`                                        | unit 134; PostgreSQL E2E 25; packed Prisma 7 consumer; lint/typecheck/clean build PASS          | local main merge `707eb59` 완료; `OUT-M07` 진행                        |
 | 2026-09-03 | `OUT-M07`   | `DONE` | `4097583`                                        | unit 145; PostgreSQL E2E 26; packed Prisma 7 consumer; lint/typecheck/build PASS                | local main merge 완료; 다음 `READY` P1인 `OUT-M09` 진행                |
+| 2026-09-03 | `OUT-M09`   | `DONE` | `codex/out-m09-listener-lifecycle` working tree  | unit 155; PostgreSQL E2E 26; packed Prisma 7 consumer; lint/typecheck/clean build PASS          | 변경 review 후 commit/push/PR하고 다음 `READY` P1인 `OUT-M10` 진행     |
 
 ### `OUT-M01` 종료 인계
 
@@ -881,4 +882,19 @@ Unverified paths and reason: 원격 GitHub Actions는 push 전이므로 미실�
 External PR, run, release evidence: local commit 4097583과 local main merge 완료. local compose PostgreSQL 16과 branch-local packed tarball로 검증했으며 push/PR/release는 수행하지 않았다.
 Remaining risk: application이 untrusted request tenant id를 authorization 없이 expectedTenantId로 전달하면 SQL scope는 그 값을 충실히 적용하므로 caller authorization은 필수다. cursor/pagination과 batch 결과·성능은 OUT-M18 범위다.
 Next exact action: 완료. local main에서 다음 최저 미완료 P1인 OUT-M09 LISTEN/NOTIFY lifecycle을 진행한다.
+```
+
+### `OUT-M09` 종료 인계
+
+```text
+Task: OUT-M09
+State: DONE
+Start ref / end ref: local main@de216bc59e31e619f65a24f55b7ccda2862561f6 / codex/out-m09-listener-lifecycle working tree (uncommitted)
+Changed files: listener generation/reconnect/cleanup lifecycle, typed wakeup init error와 public export, optional client listener-removal interface, unit lifecycle contracts, README/CHANGELOG, maintenance plan
+Contract / semver decision: polling이 켜져 있으면 client factory/connect/LISTEN 초기 실패를 polling fallback으로 degrade하고 background reconnect한다. polling과 wakeup이 모두 disabled이거나 polling disabled 상태에서 wakeup init이 실패하면 OutboxWakeupUnavailableError(code OUTBOX_WAKEUP_UNAVAILABLE)로 fail-fast한다. reconnectDelay는 첫 지연이며 연속 실패는 60초 cap의 exponential backoff를 사용하고 성공 시 reset한다. 교체 전 지원되는 listener를 제거하고 end()를 완료하며 제거 API가 없는 custom client는 generation으로 stale callback을 무효화한다. additive public error/interface와 reconnect/fail-fast 동작 계약이므로 누적 변경과 같은 next pre-1.0 minor 대상으로 결정했다.
+Commands and exact results: 첫 RED focused listener 2 FAIL/13 PASS(초기 connect reject, old client end 0회); 구현 뒤 focused listener 23 PASS; full unit 9 suites/155 tests PASS; PostgreSQL 16 E2E 1 suite/26 tests PASS; strict packed Nest 11.2.1/Prisma 7.10.0 install/typecheck/build/PostgreSQL smoke PASS (sha512-Wew4I/0wl8hC9EbJpmB5SAiW9SH5672qaRCgjvb1i8ll9Y6eGqaMyDwu1uLCp21yaxHTWZrEgkf+S07FnFYRvA==); lint, build typecheck, clean build, scoped Prettier, git diff --check PASS
+Unverified paths and reason: 실제 PostgreSQL server 강제 disconnect/notification-loss fallback은 OUT-M20B의 deterministic integration fixture 범위라 중복 추가하지 않았다. 원격 GitHub Actions는 push 전이므로 미실행이다.
+External PR, run, release evidence: 없음. 최종 tree는 local disposable compose project outbox-out-m09-final-20260903에서 검증하고 종료했으며 commit/push/PR/release는 수행하지 않았다.
+Remaining risk: polling disabled 구성은 LISTEN 연결이 런타임에 끊긴 동안 delivery가 reconnect까지 지연된다. custom client의 end()가 영구 미완료면 안전한 교체/shutdown도 그 transport promise를 기다린다. notification loss/fallback의 실제 PostgreSQL 장애 주입은 OUT-M20B가 소유한다.
+Next exact action: diff를 review한 뒤 OUT-M09 파일만 commit/push/PR하고, 다음 최저 미완료 P1인 OUT-M10 runtime option/state invariant validation을 진행한다.
 ```

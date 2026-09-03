@@ -1,9 +1,10 @@
 import { OutboxListener } from '../src/outbox.listener';
+import { OutboxWakeupUnavailableError } from '../src';
 import type { OutboxNotificationClient } from '../src/interfaces/outbox-wakeup.interface';
 import type { OutboxOptions } from '../src/interfaces/outbox-options.interface';
 import { OutboxPoller } from '../src/outbox.poller';
 
-function createClient(): {
+function createClient(supportsListenerRemoval = false): {
   client: jest.Mocked<OutboxNotificationClient>;
   handlers: Record<string, Array<(payload: any) => void>>;
 } {
@@ -18,6 +19,16 @@ function createClient(): {
       return client;
     }),
   };
+
+  if (supportsListenerRemoval) {
+    client.removeListener = jest.fn(
+      (event: string, handler: (payload: any) => void) => {
+        const index = handlers[event]?.indexOf(handler) ?? -1;
+        if (index >= 0) handlers[event].splice(index, 1);
+        return client;
+      },
+    );
+  }
 
   return { client, handlers };
 }
@@ -223,6 +234,23 @@ describe('OutboxListener', () => {
     expect(client.connect).not.toHaveBeenCalled();
   });
 
+  it('should fail fast when both polling and wakeup are disabled', async () => {
+    const listener = new OutboxListener(
+      {
+        prisma: {},
+        polling: { enabled: false },
+        wakeup: { enabled: false },
+      },
+      createPoller(),
+    );
+
+    await expect(listener.onModuleInit()).rejects.toMatchObject({
+      name: 'OutboxWakeupUnavailableError',
+      code: 'OUTBOX_WAKEUP_UNAVAILABLE',
+      cause: expect.objectContaining({ message: 'wakeup.enabled is false' }),
+    } satisfies Partial<OutboxWakeupUnavailableError>);
+  });
+
   it('should fall back to polling when pg is unavailable and no client factory exists', async () => {
     const poller = createPoller();
     const listener = new OutboxListener(
@@ -235,6 +263,75 @@ describe('OutboxListener', () => {
     jest.spyOn(listener as any, 'loadPgClient').mockReturnValue(null);
 
     await expect(listener.onModuleInit()).resolves.toBeUndefined();
+  });
+
+  it('should degrade to polling when the initial wakeup connection fails', async () => {
+    jest.useFakeTimers();
+    const { client } = createClient();
+    client.connect.mockRejectedValueOnce(new Error('database unavailable'));
+    const listener = new OutboxListener(
+      {
+        prisma: {},
+        polling: { enabled: true },
+        wakeup: {
+          enabled: true,
+          reconnectDelay: 50,
+          clientFactory: () => client,
+        },
+      },
+      createPoller(),
+    );
+
+    await expect(listener.onModuleInit()).resolves.toBeUndefined();
+    expect(client.end).toHaveBeenCalledTimes(1);
+    await listener.onApplicationShutdown();
+  });
+
+  it('should degrade to polling and close the client when the initial LISTEN query fails', async () => {
+    jest.useFakeTimers();
+    const { client } = createClient();
+    client.query.mockRejectedValueOnce(new Error('LISTEN denied'));
+    const listener = new OutboxListener(
+      {
+        prisma: {},
+        wakeup: {
+          enabled: true,
+          reconnectDelay: 50,
+          clientFactory: () => client,
+        },
+      },
+      createPoller(),
+    );
+
+    await expect(listener.onModuleInit()).resolves.toBeUndefined();
+    expect(client.end).toHaveBeenCalledTimes(1);
+    await listener.onApplicationShutdown();
+  });
+
+  it('should fail fast with a stable typed error when polling is disabled and wakeup is unavailable', async () => {
+    jest.useFakeTimers();
+    const { client } = createClient();
+    client.connect.mockRejectedValueOnce(new Error('database unavailable'));
+    const listener = new OutboxListener(
+      {
+        prisma: {},
+        polling: { enabled: false },
+        wakeup: {
+          enabled: true,
+          reconnectDelay: 50,
+          clientFactory: () => client,
+        },
+      },
+      createPoller(),
+    );
+
+    await expect(listener.onModuleInit()).rejects.toMatchObject({
+      name: 'OutboxWakeupUnavailableError',
+      code: 'OUTBOX_WAKEUP_UNAVAILABLE',
+      cause: expect.objectContaining({ message: 'database unavailable' }),
+    } satisfies Partial<OutboxWakeupUnavailableError>);
+    expect(client.end).toHaveBeenCalledTimes(1);
+    expect(jest.getTimerCount()).toBe(0);
   });
 
   it('should reconnect after client errors', async () => {
@@ -266,6 +363,137 @@ describe('OutboxListener', () => {
     expect(clientFactory).toHaveBeenCalledTimes(2);
     expect(second.client.connect).toHaveBeenCalledTimes(1);
     expect(second.client.query).toHaveBeenCalledWith('LISTEN "outbox_custom"');
+  });
+
+  it('should close the old client before reconnecting', async () => {
+    jest.useFakeTimers();
+    const first = createClient();
+    const second = createClient();
+    const clientFactory = jest
+      .fn()
+      .mockReturnValueOnce(first.client)
+      .mockReturnValueOnce(second.client);
+    const listener = new OutboxListener(
+      {
+        prisma: {},
+        wakeup: {
+          enabled: true,
+          reconnectDelay: 50,
+          clientFactory,
+        },
+      },
+      createPoller(),
+    );
+
+    await listener.onModuleInit();
+    first.handlers.error[0](new Error('connection dropped'));
+    await jest.advanceTimersByTimeAsync(50);
+
+    expect(first.client.end).toHaveBeenCalledTimes(1);
+    expect(first.client.end.mock.invocationCallOrder[0]).toBeLessThan(
+      second.client.connect.mock.invocationCallOrder[0],
+    );
+    await listener.onApplicationShutdown();
+  });
+
+  it('should remove old client listeners when the transport supports removal', async () => {
+    jest.useFakeTimers();
+    const first = createClient(true);
+    const second = createClient();
+    const listener = new OutboxListener(
+      {
+        prisma: {},
+        wakeup: {
+          enabled: true,
+          reconnectDelay: 50,
+          clientFactory: jest
+            .fn()
+            .mockReturnValueOnce(first.client)
+            .mockReturnValueOnce(second.client),
+        },
+      },
+      createPoller(),
+    );
+
+    await listener.onModuleInit();
+    const errorHandler = first.handlers.error[0];
+    errorHandler(new Error('connection dropped'));
+    await jest.advanceTimersByTimeAsync(50);
+
+    expect(first.client.removeListener).toHaveBeenCalledTimes(3);
+    expect(first.handlers.notification).toHaveLength(0);
+    expect(first.handlers.error).toHaveLength(0);
+    expect(first.handlers.end).toHaveLength(0);
+    await listener.onApplicationShutdown();
+  });
+
+  it('should ignore stale callbacks when the transport cannot remove listeners', async () => {
+    jest.useFakeTimers();
+    const first = createClient();
+    const second = createClient();
+    const third = createClient();
+    const poller = createPoller();
+    const clientFactory = jest
+      .fn()
+      .mockReturnValueOnce(first.client)
+      .mockReturnValueOnce(second.client)
+      .mockReturnValueOnce(third.client);
+    const listener = new OutboxListener(
+      {
+        prisma: {},
+        wakeup: {
+          enabled: true,
+          channel: 'outbox_custom',
+          reconnectDelay: 50,
+          clientFactory,
+        },
+      },
+      poller,
+    );
+
+    await listener.onModuleInit();
+    const staleError = first.handlers.error[0];
+    const staleNotification = first.handlers.notification[0];
+    staleError(new Error('connection dropped'));
+    await jest.advanceTimersByTimeAsync(50);
+
+    staleError(new Error('stale error'));
+    staleNotification({ channel: 'outbox_custom' });
+    await jest.advanceTimersByTimeAsync(500);
+
+    expect(clientFactory).toHaveBeenCalledTimes(2);
+    expect(first.client.end).toHaveBeenCalledTimes(1);
+    expect(poller.requestPoll).not.toHaveBeenCalled();
+    await listener.onApplicationShutdown();
+  });
+
+  it('should reconnect after an unexpected client end', async () => {
+    jest.useFakeTimers();
+    const first = createClient();
+    const second = createClient();
+    const clientFactory = jest
+      .fn()
+      .mockReturnValueOnce(first.client)
+      .mockReturnValueOnce(second.client);
+    const listener = new OutboxListener(
+      {
+        prisma: {},
+        wakeup: {
+          enabled: true,
+          reconnectDelay: 50,
+          clientFactory,
+        },
+      },
+      createPoller(),
+    );
+
+    await listener.onModuleInit();
+    first.handlers.end[0](undefined);
+    await jest.advanceTimersByTimeAsync(50);
+
+    expect(first.client.end).toHaveBeenCalledTimes(1);
+    expect(second.client.query).toHaveBeenCalledTimes(1);
+    await listener.onApplicationShutdown();
   });
 
   it('should not schedule duplicate reconnect timers', async () => {
@@ -349,6 +577,71 @@ describe('OutboxListener', () => {
 
     expect(clientFactory).toHaveBeenCalledTimes(2);
     await listener.onApplicationShutdown();
+  });
+
+  it('should exponentially back off consecutive reconnect failures', async () => {
+    jest.useFakeTimers();
+    const first = createClient();
+    const failedReconnect = createClient();
+    failedReconnect.client.connect.mockRejectedValueOnce(
+      new Error('still down'),
+    );
+    const recovered = createClient();
+    const clientFactory = jest
+      .fn()
+      .mockReturnValueOnce(first.client)
+      .mockReturnValueOnce(failedReconnect.client)
+      .mockReturnValueOnce(recovered.client);
+    const listener = new OutboxListener(
+      {
+        prisma: {},
+        wakeup: {
+          enabled: true,
+          reconnectDelay: 50,
+          clientFactory,
+        },
+      },
+      createPoller(),
+    );
+
+    await listener.onModuleInit();
+    first.handlers.error[0](new Error('connection dropped'));
+    await jest.advanceTimersByTimeAsync(50);
+    expect(clientFactory).toHaveBeenCalledTimes(2);
+
+    await jest.advanceTimersByTimeAsync(99);
+    expect(clientFactory).toHaveBeenCalledTimes(2);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(clientFactory).toHaveBeenCalledTimes(3);
+    expect(recovered.client.query).toHaveBeenCalledTimes(1);
+    await listener.onApplicationShutdown();
+  });
+
+  it('should close a client created during shutdown without connecting it', async () => {
+    let resolveClient!: (client: OutboxNotificationClient) => void;
+    const pendingClient = new Promise<OutboxNotificationClient>((resolve) => {
+      resolveClient = resolve;
+    });
+    const { client } = createClient();
+    const listener = new OutboxListener(
+      {
+        prisma: {},
+        wakeup: {
+          enabled: true,
+          clientFactory: () => pendingClient,
+        },
+      },
+      createPoller(),
+    );
+
+    const initialization = listener.onModuleInit();
+    const shutdown = listener.onApplicationShutdown();
+    resolveClient(client);
+    await Promise.all([initialization, shutdown]);
+
+    expect(client.connect).not.toHaveBeenCalled();
+    expect(client.query).not.toHaveBeenCalled();
+    expect(client.end).toHaveBeenCalledTimes(1);
   });
 
   it('should close the notification client on shutdown', async () => {

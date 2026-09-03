@@ -10,6 +10,10 @@ export {
 } from './outbox.admin.service';
 export { OutboxEmitter } from './outbox.emitter';
 export { OutboxListener } from './outbox.listener';
+export {
+  OUTBOX_WAKEUP_UNAVAILABLE,
+  OutboxWakeupUnavailableError,
+} from './errors/outbox-wakeup-unavailable.error';
 export { OnOutboxEvent } from './outbox.decorator';
 
 // Transport

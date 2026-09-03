@@ -254,6 +254,7 @@ All options passed to `OutboxModule.forRoot()` or the factory returned by `Outbo
 | `wakeup.enabled`                  | `boolean`                               | `false`                      | Enable PostgreSQL `LISTEN/NOTIFY` wakeup in addition to polling. Requires `pg` or a custom `clientFactory`.                                            |
 | `wakeup.channel`                  | `string`                                | `'outbox_events'`            | PostgreSQL notification channel.                                                                                                                       |
 | `wakeup.connectionString`         | `string`                                | `pg` default                 | Connection string used by the notification client when `pg` is installed.                                                                              |
+| `wakeup.reconnectDelay`           | `number`                                | `5000`                       | Base reconnect delay in ms. Consecutive failures back off exponentially up to 60 seconds and reset after a successful `LISTEN`.                        |
 | `lease.duration`                  | `number`                                | `stuckThreshold` or `300000` | Claim lifetime in ms. Active callbacks renew the lease; expired claims are eligible for recovery.                                                      |
 | `lease.heartbeatInterval`         | `number`                                | `lease.duration / 3`         | Heartbeat interval in ms. Must be positive and less than half of `lease.duration`.                                                                     |
 | `lease.heartbeatFailureTolerance` | `number`                                | `1`                          | Consecutive heartbeat errors tolerated before the claimant abandons completion and lets the lease expire.                                              |
@@ -479,7 +480,18 @@ OutboxModule.forRoot({
 });
 ```
 
-If `wakeup.enabled` is true but `pg` is not installed, the package logs a warning and continues with normal polling fallback.
+If the initial notification client creation, connection, or `LISTEN` query fails
+while polling is enabled, the package closes that client, logs the degraded
+state, continues with polling, and retries in the background with capped
+exponential backoff. Reconnect replaces the old client only after detaching its
+listeners when supported and calling `end()`; stale callbacks are ignored even
+when a custom client has no listener-removal API. Shutdown cancels pending
+reconnect work and closes clients created by an in-flight connection attempt.
+
+If `polling.enabled` is `false` and wakeup is disabled or its initialization is
+unavailable, module initialization fails with `OutboxWakeupUnavailableError`
+and stable code `OUTBOX_WAKEUP_UNAVAILABLE`; the module does not boot with no
+delivery trigger.
 
 ## Retry and Backoff
 
