@@ -176,8 +176,8 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 |    5 | `OUT-M04B`     | P0       | `DONE`     | L    | `OUT-M01–03`                                                                         | 실제 PostgreSQL 다중 poller/crash-window gate                       |
 |    6 | `OUT-M05`      | P1       | `DONE`     | M    | `OUT-M01`                                                                            | `next_attempt_at` 기반 영속 retry 시각                              |
 |    7 | `OUT-M06`      | P1       | `DONE`     | M    | 없음                                                                                 | tenant producer provenance 정책                                     |
-|    8 | `OUT-M07`      | P1       | `BLOCKED`  | M    | `OUT-M06`, `OUT-M08`                                                                 | privileged/tenant-safe admin 경계                                   |
-|    9 | `OUT-M08`      | P1       | `READY`    | M    | `OUT-M01–02`, `OUT-M05`                                                              | admin 상태 전이 CAS                                                 |
+|    8 | `OUT-M07`      | P1       | `READY`    | M    | `OUT-M06`, `OUT-M08`                                                                 | privileged/tenant-safe admin 경계                                   |
+|    9 | `OUT-M08`      | P1       | `DONE`     | M    | `OUT-M01–02`, `OUT-M05`                                                              | admin 상태 전이 CAS                                                 |
 |   10 | `OUT-M09`      | P1       | `READY`    | M    | `OUT-M03`                                                                            | LISTEN/NOTIFY degrade/reconnect lifecycle                           |
 |   11 | `OUT-M10`      | P1       | `READY`    | M    | 없음                                                                                 | runtime option/state invariant validation                           |
 |   12 | `OUT-M11`      | P1       | `READY`    | M    | 없음                                                                                 | `forRootAsync` DI와 async option 계약                               |
@@ -380,7 +380,7 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 
 ### `OUT-M07` — privileged operator API와 tenant-safe admin API
 
-- 상태: `P1 / BLOCKED`; 선행 `OUT-M06`, `OUT-M08`
+- 상태: `P1 / READY`; 선행 `OUT-M06`, `OUT-M08`
 
 완료 조건:
 
@@ -394,15 +394,15 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 
 ### `OUT-M08` — admin 상태 전이 CAS
 
-- 상태: `P1 / READY`; 선행 `OUT-M01–02`, `OUT-M05`
+- 상태: `P1 / DONE`; 선행 `OUT-M01–02`, `OUT-M05`
 
 완료 조건:
 
-- [ ] retry, markFailed, purge의 허용 source-state matrix가 있다.
-- [ ] active claim은 owner/fencing 계약 없이 admin이 terminal로 덮지 않는다.
-- [ ] poller와 admin race에서 terminal state가 역전되지 않는다.
-- [ ] retry count, lastError, processedAt, nextAttemptAt 불변식을 operation별로 고정한다.
-- [ ] 결과는 `applied | not_found | conflict | lost_claim` 또는 동등한 discriminated union으로 고정하고 stale/illegal mutation을 구분한다.
+- [x] retry, markFailed, purge의 허용 source-state matrix가 있다.
+- [x] active claim은 owner/fencing 계약 없이 admin이 terminal로 덮지 않는다.
+- [x] poller와 admin race에서 terminal state가 역전되지 않는다.
+- [x] retry count, lastError, processedAt, nextAttemptAt 불변식을 operation별로 고정한다.
+- [x] 결과는 `applied | not_found | conflict | lost_claim` 또는 동등한 discriminated union으로 고정하고 stale/illegal mutation을 구분한다.
 
 검증: 프로필 A/B/C.
 
@@ -745,6 +745,7 @@ Outbox ── durable record / publisher callback ──> Jobs adapter ──> J
 | 2026-09-03 | `OUT-M04B`  | `DONE` | local main `9418db9` working tree                | unit 110; PostgreSQL E2E 19; packed Prisma 7 consumer; coverage/audit/lint/build PASS           | 변경 review 후 commit/push/PR                                          |
 | 2026-09-03 | `OUT-M05`   | `DONE` | `codex/out-m05-persisted-retry-due` working tree | unit 115; PostgreSQL E2E 22; packed Prisma 7 consumer; lint/typecheck/build PASS                | 변경 review 후 commit/push/PR하고 `OUT-M06` 정책 결정                  |
 | 2026-09-03 | `OUT-M06`   | `DONE` | `codex/out-m06-tenant-provenance` working tree   | unit 129; PostgreSQL E2E 22; packed Prisma 7 consumer; lint/typecheck/clean build PASS          | 변경 review 후 commit/push/PR하고 `OUT-M08` admin 상태 전이 CAS 진행   |
+| 2026-09-03 | `OUT-M08`   | `DONE` | `codex/out-m08-admin-cas` working tree           | unit 134; PostgreSQL E2E 25; packed Prisma 7 consumer; lint/typecheck/clean build PASS          | 변경 review 후 commit/push/PR하고 이제 `READY`인 `OUT-M07` 진행        |
 
 ### `OUT-M01` 종료 인계
 
@@ -849,4 +850,19 @@ Unverified paths and reason: 원격 GitHub Actions는 push 전이므로 미실�
 External PR, run, release evidence: 없음. local disposable compose project outbox-out-m06-20260903에서 검증했으며 commit/push/PR/release는 수행하지 않았다.
 Remaining risk: optional 정책은 tenant가 없을 때 호환성을 위해 NULL을 허용하므로 tenant attribution이 필수인 애플리케이션은 required 또는 require-match를 선택해야 한다. tenant-safe admin authorization은 OUT-M07, async provider DI는 OUT-M11 범위다.
 Next exact action: diff를 review한 뒤 OUT-M06 파일만 commit/push/PR하고, 선행이 완료된 OUT-M08 admin 상태 전이 CAS를 진행한 뒤 OUT-M07 tenant-safe admin 경계를 연다.
+```
+
+### `OUT-M08` 종료 인계
+
+```text
+Task: OUT-M08
+State: DONE
+Start ref / end ref: local main@f6d8d6cd652bf830afadc69e458b78cc4c06bb15 / codex/out-m08-admin-cas working tree (uncommitted)
+Changed files: admin retry/markFailed CAS와 공개 mutation result type/export, source-state/invariant unit·PostgreSQL race tests, README/CHANGELOG, ADR 0004, maintenance plan
+Contract / semver decision: retry는 FAILED→PENDING, markFailed는 PENDING→FAILED, purgeSent는 cutoff 이전 SENT 삭제만 허용하고 PROCESSING은 모든 admin mutation에서 제외한다. retry/markFailed는 applied | not_found | conflict(currentStatus) | lost_claim 판별 결과를 반환한다. retryMany/purgeSent는 source predicate를 가진 count-returning batch API를 유지한다. boolean 반환형과 markFailed 허용 상태를 바꾸므로 next pre-1.0 minor 대상으로 결정했다.
+Commands and exact results: 첫 RED focused admin 9 FAIL/14 PASS; 구현 뒤 focused admin 23 PASS; npm ci 649 packages; full unit 9 suites/134 tests PASS; PostgreSQL 16 E2E 1 suite/25 tests PASS; strict packed 첫 sandbox 실행은 registry metadata 미해결로 @nestjs/common@undefined ERESOLVE, network 허용 재실행에서 exact Nest 11.2.1/Prisma 7.10.0 install/typecheck/build/PostgreSQL smoke PASS (sha512-DZaW+qrdviTVhvnCj+A6obad4YV23FIdUEV8ryLPV8+CweRcKnqI3hJA3wFAfjlUJ5PKdP2IZH8W5rTK/1+tnw==); lint, build typecheck, clean build, scoped Prettier PASS; git diff --check PASS
+Unverified paths and reason: 원격 GitHub Actions는 push 전이므로 미실행이다. tenant-scoped read/mutation authorization은 OUT-M07 범위라 이 작업에 포함하지 않았다.
+External PR, run, release evidence: 없음. local compose PostgreSQL 16과 branch-local packed tarball로 검증했으며 commit/push/PR/release는 수행하지 않았다.
+Remaining risk: global OutboxAdminService는 아직 trusted control-plane/tenant-safe surface로 분리되지 않아 application authorization이 필요하다. OUT-M07이 바로 이어서 소유한다. retryMany의 per-id 결과와 대량 성능은 OUT-M18 범위다.
+Next exact action: diff를 review한 뒤 OUT-M08 파일만 commit/push/PR하고, 이제 선행이 모두 완료된 OUT-M07 privileged/tenant-safe admin 경계를 진행한다.
 ```

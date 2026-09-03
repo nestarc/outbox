@@ -313,7 +313,10 @@ When the Prisma transaction client exposes `$executeRawUnsafe`, `emitMany()` use
 
 ```typescript
 const failed = await admin.list({ status: 'FAILED', tenantId: 'tenant-1' });
-await admin.retry(failed[0].id);
+const retryResult = await admin.retry(failed[0].id);
+if (retryResult.outcome !== 'applied') {
+  // Handle not_found, conflict, or lost_claim explicitly.
+}
 
 const stats = await admin.getStats();
 const health = await admin.getHealth({
@@ -336,7 +339,33 @@ Available methods:
 `retry()` and `retryMany()` only reset `FAILED` rows to `PENDING`; they do not
 touch `PROCESSING` rows or reset `retry_count`. A manual retry clears
 `last_error` and `processed_at`, then sets `next_attempt_at` to the database's
-current time so it is explicitly due now.
+current time so it is explicitly due now. `markFailed()` only changes
+`PENDING` rows; it records the reason and database completion time without
+changing `retry_count`. `purgeSent()` only deletes `SENT` rows whose
+`processed_at` is before the requested cutoff. No admin mutation overwrites an
+active `PROCESSING` claim.
+
+Single-record mutations return a discriminated result:
+
+- `applied`: the compare-and-set transition committed.
+- `not_found`: the event id did not exist when the operation observed it.
+- `conflict`: the event exists in a source state that the operation does not
+  allow; `currentStatus` contains that observed state.
+- `lost_claim`: the operation observed an allowed source state, but another
+  transaction changed it before the compare-and-set could commit.
+
+The allowed source-state matrix is:
+
+| Operation     | Allowed source | Result                      |
+| ------------- | -------------- | --------------------------- |
+| `retry`       | `FAILED`       | `PENDING` and due now       |
+| `retryMany`   | `FAILED`       | `PENDING` and due now       |
+| `markFailed`  | `PENDING`      | `FAILED` with operator note |
+| `purgeSent`   | `SENT`         | row deleted                 |
+| Any operation | `PROCESSING`   | unchanged                   |
+
+`retryMany()` and `purgeSent()` remain count-returning batch operations. Their
+SQL source predicates skip ineligible rows atomically.
 
 ## Tenancy
 

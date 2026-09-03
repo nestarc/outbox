@@ -24,6 +24,7 @@ export type {
   OutboxHealth,
   OutboxHealthOptions,
   OutboxListOptions,
+  OutboxAdminMutationResult,
   OutboxStats,
 } from './interfaces/outbox-admin.interface';
 export type {

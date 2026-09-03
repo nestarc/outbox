@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Admin `retry()` and `markFailed()` now use compare-and-set source-state
+  transitions and return `applied`, `not_found`, `conflict`, or `lost_claim`.
+  `markFailed()` accepts only `PENDING`; all admin mutations leave active
+  `PROCESSING` claims untouched. Retry, failure, and purge invariants are now
+  fixed by an explicit operation matrix.
 - Tenant producer provenance is now controlled by
   `tenancy.policy: 'optional' | 'required' | 'require-match'`. Undefined tenant
   ids fall back to the configured provider; null, non-string, blank, and
@@ -67,8 +72,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   their recovery threshold. Drain 0.2.x pollers before starting the new runtime
   because older pollers neither heartbeat active claims nor persist due times.
 - Because the required schema migration and readonly public type tightening
-  affect consumers, this change is targeted at the next pre-1.0 minor release
-  rather than a patch release.
+  affect consumers, and the admin single-record mutation result changed from a
+  boolean to a discriminated union, this change is targeted at the next
+  pre-1.0 minor release rather than a patch release.
 
 ## [0.2.1] — 2026-08-30
 

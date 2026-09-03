@@ -4,6 +4,7 @@ import type {
   OutboxHealth,
   OutboxHealthOptions,
   OutboxListOptions,
+  OutboxAdminMutationResult,
   OutboxStats,
 } from './interfaces/outbox-admin.interface';
 import type { OutboxOptions } from './interfaces/outbox-options.interface';
@@ -138,23 +139,49 @@ export class OutboxAdminService {
     return rows[0] ? this.mapRecord(rows[0]) : null;
   }
 
-  async retry(id: string): Promise<boolean> {
-    const updated = await this.executeRawUnsafe(
+  async retry(id: string): Promise<OutboxAdminMutationResult> {
+    const rows = await this.queryRawUnsafe<
+      Array<{ outcome: string; current_status: unknown }>
+    >(
       `
-        UPDATE outbox_events
-        SET status = 'PENDING',
-            last_error = NULL,
-            processed_at = NULL,
-            next_attempt_at = NOW(),
-            updated_at = NOW()
-        WHERE id = $1::uuid
-          AND status = $2
+        WITH target AS MATERIALIZED (
+          SELECT id, status
+          FROM outbox_events
+          WHERE id = $1::uuid
+        ),
+        updated AS (
+          UPDATE outbox_events AS current
+          SET status = 'PENDING',
+              claim_token = NULL,
+              lease_expires_at = NULL,
+              last_error = NULL,
+              processed_at = NULL,
+              next_attempt_at = NOW(),
+              updated_at = NOW()
+          WHERE current.id = $1::uuid
+            AND current.status = $2
+            AND EXISTS (
+              SELECT 1
+              FROM target
+              WHERE target.id = current.id
+                AND target.status = $2
+            )
+          RETURNING current.id
+        )
+        SELECT
+          CASE
+            WHEN EXISTS (SELECT 1 FROM updated) THEN 'applied'
+            WHEN NOT EXISTS (SELECT 1 FROM target) THEN 'not_found'
+            WHEN (SELECT status FROM target) <> $2 THEN 'conflict'
+            ELSE 'lost_claim'
+          END AS outcome,
+          (SELECT status FROM target) AS current_status
       `,
       id,
       'FAILED',
     );
 
-    return updated > 0;
+    return this.mapMutationResult(rows[0]);
   }
 
   async retryMany(ids: string[]): Promise<number> {
@@ -181,21 +208,52 @@ export class OutboxAdminService {
     );
   }
 
-  async markFailed(id: string, reason: string): Promise<boolean> {
-    const updated = await this.executeRawUnsafe(
+  async markFailed(
+    id: string,
+    reason: string,
+  ): Promise<OutboxAdminMutationResult> {
+    const rows = await this.queryRawUnsafe<
+      Array<{ outcome: string; current_status: unknown }>
+    >(
       `
-        UPDATE outbox_events
-        SET status = 'FAILED',
-            last_error = $2,
-            next_attempt_at = NULL,
-            updated_at = NOW()
-        WHERE id = $1::uuid
+        WITH target AS MATERIALIZED (
+          SELECT id, status
+          FROM outbox_events
+          WHERE id = $1::uuid
+        ),
+        updated AS (
+          UPDATE outbox_events AS current
+          SET status = 'FAILED',
+              claim_token = NULL,
+              lease_expires_at = NULL,
+              last_error = $2,
+              processed_at = NOW(),
+              next_attempt_at = NULL,
+              updated_at = NOW()
+          WHERE current.id = $1::uuid
+            AND current.status = 'PENDING'
+            AND EXISTS (
+              SELECT 1
+              FROM target
+              WHERE target.id = current.id
+                AND target.status = 'PENDING'
+            )
+          RETURNING current.id
+        )
+        SELECT
+          CASE
+            WHEN EXISTS (SELECT 1 FROM updated) THEN 'applied'
+            WHEN NOT EXISTS (SELECT 1 FROM target) THEN 'not_found'
+            WHEN (SELECT status FROM target) <> 'PENDING' THEN 'conflict'
+            ELSE 'lost_claim'
+          END AS outcome,
+          (SELECT status FROM target) AS current_status
       `,
       id,
       reason,
     );
 
-    return updated > 0;
+    return this.mapMutationResult(rows[0]);
   }
 
   async purgeSent(options: { before: Date; limit?: number }): Promise<number> {
@@ -311,6 +369,27 @@ export class OutboxAdminService {
       headers: this.toHeaders(row.headers),
       occurredAt: this.toDate(row.occurred_at ?? row.occurredAt),
     };
+  }
+
+  private mapMutationResult(row: {
+    outcome: string;
+    current_status: unknown;
+  }): OutboxAdminMutationResult {
+    switch (row.outcome) {
+      case 'applied':
+      case 'not_found':
+      case 'lost_claim':
+        return { outcome: row.outcome };
+      case 'conflict':
+        return {
+          outcome: 'conflict',
+          currentStatus: String(row.current_status) as OutboxRecord['status'],
+        };
+      default:
+        throw new Error(
+          `Unknown outbox admin mutation outcome: ${row.outcome}`,
+        );
+    }
   }
 
   private normalizeLimit(limit: number | undefined): number {

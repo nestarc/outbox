@@ -28,3 +28,12 @@ export interface OutboxHealth {
   stats: OutboxStats;
   reasons: string[];
 }
+
+export type OutboxAdminMutationResult =
+  | { outcome: 'applied' }
+  | { outcome: 'not_found' }
+  | {
+      outcome: 'conflict';
+      currentStatus: OutboxRecord['status'];
+    }
+  | { outcome: 'lost_claim' };
