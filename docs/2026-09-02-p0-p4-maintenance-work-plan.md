@@ -176,7 +176,7 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 |    5 | `OUT-M04B`     | P0       | `DONE`     | L    | `OUT-M01–03`                                                                         | 실제 PostgreSQL 다중 poller/crash-window gate                       |
 |    6 | `OUT-M05`      | P1       | `DONE`     | M    | `OUT-M01`                                                                            | `next_attempt_at` 기반 영속 retry 시각                              |
 |    7 | `OUT-M06`      | P1       | `DONE`     | M    | 없음                                                                                 | tenant producer provenance 정책                                     |
-|    8 | `OUT-M07`      | P1       | `READY`    | M    | `OUT-M06`, `OUT-M08`                                                                 | privileged/tenant-safe admin 경계                                   |
+|    8 | `OUT-M07`      | P1       | `DONE`     | M    | `OUT-M06`, `OUT-M08`                                                                 | privileged/tenant-safe admin 경계                                   |
 |    9 | `OUT-M08`      | P1       | `DONE`     | M    | `OUT-M01–02`, `OUT-M05`                                                              | admin 상태 전이 CAS                                                 |
 |   10 | `OUT-M09`      | P1       | `READY`    | M    | `OUT-M03`                                                                            | LISTEN/NOTIFY degrade/reconnect lifecycle                           |
 |   11 | `OUT-M10`      | P1       | `READY`    | M    | 없음                                                                                 | runtime option/state invariant validation                           |
@@ -380,15 +380,15 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 
 ### `OUT-M07` — privileged operator API와 tenant-safe admin API
 
-- 상태: `P1 / READY`; 선행 `OUT-M06`, `OUT-M08`
+- 상태: `P1 / DONE`; 선행 `OUT-M06`, `OUT-M08`
 
 완료 조건:
 
-- [ ] 기존 global admin API가 trusted control plane임을 이름/문서/타입으로 명확히 한다.
-- [ ] tenant-facing read/mutation에는 expected tenant/scope predicate가 SQL에 반드시 들어간다.
-- [ ] tenant A는 B의 payload, headers, error, stats를 조회하거나 retry/fail/purge할 수 없다.
-- [ ] privileged API를 HTTP controller에 직접 노출하지 말라는 예제와 caller authorization 책임을 문서화한다.
-- [ ] 패키지가 RBAC 구현을 import하지 않는다.
+- [x] 기존 global admin API가 trusted control plane임을 이름/문서/타입으로 명확히 한다.
+- [x] tenant-facing read/mutation에는 expected tenant/scope predicate가 SQL에 반드시 들어간다.
+- [x] tenant A는 B의 payload, headers, error, stats를 조회하거나 retry/fail/purge할 수 없다.
+- [x] privileged API를 HTTP controller에 직접 노출하지 말라는 예제와 caller authorization 책임을 문서화한다.
+- [x] 패키지가 RBAC 구현을 import하지 않는다.
 
 검증: 프로필 A/B/D.
 
@@ -745,7 +745,8 @@ Outbox ── durable record / publisher callback ──> Jobs adapter ──> J
 | 2026-09-03 | `OUT-M04B`  | `DONE` | local main `9418db9` working tree                | unit 110; PostgreSQL E2E 19; packed Prisma 7 consumer; coverage/audit/lint/build PASS           | 변경 review 후 commit/push/PR                                          |
 | 2026-09-03 | `OUT-M05`   | `DONE` | `codex/out-m05-persisted-retry-due` working tree | unit 115; PostgreSQL E2E 22; packed Prisma 7 consumer; lint/typecheck/build PASS                | 변경 review 후 commit/push/PR하고 `OUT-M06` 정책 결정                  |
 | 2026-09-03 | `OUT-M06`   | `DONE` | `codex/out-m06-tenant-provenance` working tree   | unit 129; PostgreSQL E2E 22; packed Prisma 7 consumer; lint/typecheck/clean build PASS          | 변경 review 후 commit/push/PR하고 `OUT-M08` admin 상태 전이 CAS 진행   |
-| 2026-09-03 | `OUT-M08`   | `DONE` | `codex/out-m08-admin-cas` working tree           | unit 134; PostgreSQL E2E 25; packed Prisma 7 consumer; lint/typecheck/clean build PASS          | 변경 review 후 commit/push/PR하고 이제 `READY`인 `OUT-M07` 진행        |
+| 2026-09-03 | `OUT-M08`   | `DONE` | `01f3fcd`                                        | unit 134; PostgreSQL E2E 25; packed Prisma 7 consumer; lint/typecheck/clean build PASS          | local main merge `707eb59` 완료; `OUT-M07` 진행                        |
+| 2026-09-03 | `OUT-M07`   | `DONE` | `4097583`                                        | unit 145; PostgreSQL E2E 26; packed Prisma 7 consumer; lint/typecheck/build PASS                | local main merge 완료; 다음 `READY` P1인 `OUT-M09` 진행                |
 
 ### `OUT-M01` 종료 인계
 
@@ -857,12 +858,27 @@ Next exact action: diff를 review한 뒤 OUT-M06 파일만 commit/push/PR하고,
 ```text
 Task: OUT-M08
 State: DONE
-Start ref / end ref: local main@f6d8d6cd652bf830afadc69e458b78cc4c06bb15 / codex/out-m08-admin-cas working tree (uncommitted)
+Start ref / end ref: local main@f6d8d6cd652bf830afadc69e458b78cc4c06bb15 / 01f3fcd134ff091eb1a607cc4630f36d8e4db593
 Changed files: admin retry/markFailed CAS와 공개 mutation result type/export, source-state/invariant unit·PostgreSQL race tests, README/CHANGELOG, ADR 0004, maintenance plan
 Contract / semver decision: retry는 FAILED→PENDING, markFailed는 PENDING→FAILED, purgeSent는 cutoff 이전 SENT 삭제만 허용하고 PROCESSING은 모든 admin mutation에서 제외한다. retry/markFailed는 applied | not_found | conflict(currentStatus) | lost_claim 판별 결과를 반환한다. retryMany/purgeSent는 source predicate를 가진 count-returning batch API를 유지한다. boolean 반환형과 markFailed 허용 상태를 바꾸므로 next pre-1.0 minor 대상으로 결정했다.
 Commands and exact results: 첫 RED focused admin 9 FAIL/14 PASS; 구현 뒤 focused admin 23 PASS; npm ci 649 packages; full unit 9 suites/134 tests PASS; PostgreSQL 16 E2E 1 suite/25 tests PASS; strict packed 첫 sandbox 실행은 registry metadata 미해결로 @nestjs/common@undefined ERESOLVE, network 허용 재실행에서 exact Nest 11.2.1/Prisma 7.10.0 install/typecheck/build/PostgreSQL smoke PASS (sha512-DZaW+qrdviTVhvnCj+A6obad4YV23FIdUEV8ryLPV8+CweRcKnqI3hJA3wFAfjlUJ5PKdP2IZH8W5rTK/1+tnw==); lint, build typecheck, clean build, scoped Prettier PASS; git diff --check PASS
 Unverified paths and reason: 원격 GitHub Actions는 push 전이므로 미실행이다. tenant-scoped read/mutation authorization은 OUT-M07 범위라 이 작업에 포함하지 않았다.
-External PR, run, release evidence: 없음. local compose PostgreSQL 16과 branch-local packed tarball로 검증했으며 commit/push/PR/release는 수행하지 않았다.
+External PR, run, release evidence: local commit 01f3fcd와 local main merge 707eb59. local compose PostgreSQL 16과 branch-local packed tarball로 검증했으며 push/PR/release는 수행하지 않았다.
 Remaining risk: global OutboxAdminService는 아직 trusted control-plane/tenant-safe surface로 분리되지 않아 application authorization이 필요하다. OUT-M07이 바로 이어서 소유한다. retryMany의 per-id 결과와 대량 성능은 OUT-M18 범위다.
-Next exact action: diff를 review한 뒤 OUT-M08 파일만 commit/push/PR하고, 이제 선행이 모두 완료된 OUT-M07 privileged/tenant-safe admin 경계를 진행한다.
+Next exact action: 완료. local main merge 707eb59에서 OUT-M07 privileged/tenant-safe admin 경계를 시작했다.
+```
+
+### `OUT-M07` 종료 인계
+
+```text
+Task: OUT-M07
+State: DONE
+Start ref / end ref: local main@707eb59bd7800dded1535a3b91db54c1205663e8 / 4097583ff89b6494a7107009fff5ce1b306d57da
+Changed files: privileged operator/compatibility alias와 tenant-scoped admin services, tenant SQL predicates와 public list type/export/module wiring, unit/PostgreSQL/packed-consumer isolation contracts, README/CHANGELOG, ADR 0005, maintenance plan
+Contract / semver decision: OutboxOperatorService는 모든 tenant를 볼 수 있는 trusted global control-plane API다. OutboxAdminService는 같은 Nest token/instance의 deprecated compatibility alias다. OutboxTenantAdminService.forTenant(expectedTenantId)는 canonical fixed scope를 만들고 list/get/stats/health/retry/mark/retryMany/purge의 모든 SQL에 tenant_id predicate를 강제한다. cross-tenant 단건 id는 존재 여부를 숨기기 위해 null/not_found, batch는 적용 건수에서 제외한다. package는 authentication/RBAC/controller를 구현하지 않고 caller가 trusted context에서 tenant authorization을 완료해야 한다. additive service/type과 deprecated alias이므로 앞선 작업과 같은 next pre-1.0 minor 대상으로 결정했다.
+Commands and exact results: 첫 RED focused admin은 새 export 부재 TypeScript 2 errors; 구현 뒤 focused admin/module 2 suites/42 tests PASS; full unit 9 suites/145 tests PASS; PostgreSQL 16 E2E 1 suite/26 tests PASS; strict packed Nest 11.2.1/Prisma 7.10.0 install/typecheck/build/PostgreSQL smoke PASS (sha512-7u9NqSKP9mTBCbSYTEHNuaiw0LNpEi9Gcdl3uEbC3yp9qlWz90HTHtq6w/AW1/UDaxurHlSUVDtclVGtAxCTcg==); lint, build typecheck/build, scoped Prettier PASS; git diff --check PASS
+Unverified paths and reason: 원격 GitHub Actions는 push 전이므로 미실행이다. host application의 실제 authentication/RBAC/HTTP controller는 package 비범위라 fixture를 추가하지 않았다.
+External PR, run, release evidence: local commit 4097583과 local main merge 완료. local compose PostgreSQL 16과 branch-local packed tarball로 검증했으며 push/PR/release는 수행하지 않았다.
+Remaining risk: application이 untrusted request tenant id를 authorization 없이 expectedTenantId로 전달하면 SQL scope는 그 값을 충실히 적용하므로 caller authorization은 필수다. cursor/pagination과 batch 결과·성능은 OUT-M18 범위다.
+Next exact action: 완료. local main에서 다음 최저 미완료 P1인 OUT-M09 LISTEN/NOTIFY lifecycle을 진행한다.
 ```

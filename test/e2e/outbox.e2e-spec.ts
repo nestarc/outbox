@@ -4,7 +4,10 @@ import { Test } from '@nestjs/testing';
 import { Injectable, type INestApplication } from '@nestjs/common';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { OutboxModule } from '../../src/outbox.module';
-import { OutboxAdminService } from '../../src/outbox.admin.service';
+import {
+  OutboxAdminService,
+  OutboxTenantAdminService,
+} from '../../src/outbox.admin.service';
 import { OutboxEmitter } from '../../src/outbox.emitter';
 import { OutboxEvent } from '../../src/outbox.event';
 import { OutboxListener } from '../../src/outbox.listener';
@@ -1414,6 +1417,171 @@ describe('Outbox E2E', () => {
       WHERE id = ${row.id}::uuid
     `;
     expect(terminal).toEqual([{ status: 'SENT' }]);
+  });
+
+  it('keeps tenant admin reads and mutations inside the expected tenant', async () => {
+    await prisma.$executeRaw`
+      INSERT INTO outbox_events (
+        event_type,
+        payload,
+        status,
+        retry_count,
+        last_error,
+        processed_at,
+        next_attempt_at,
+        tenant_id,
+        headers
+      ) VALUES
+        (
+          'tenant.admin.failed-a',
+          '{"secret":"a-failed"}'::jsonb,
+          'FAILED',
+          1,
+          'tenant-a error',
+          NOW() - INTERVAL '1 hour',
+          NULL,
+          'tenant-a',
+          '{"authorization":"a"}'::jsonb
+        ),
+        (
+          'tenant.admin.failed-b',
+          '{"secret":"b-failed"}'::jsonb,
+          'FAILED',
+          1,
+          'tenant-b error',
+          NOW() - INTERVAL '1 hour',
+          NULL,
+          'tenant-b',
+          '{"authorization":"b"}'::jsonb
+        ),
+        (
+          'tenant.admin.pending-b',
+          '{"secret":"b-pending"}'::jsonb,
+          'PENDING',
+          0,
+          NULL,
+          NULL,
+          NULL,
+          'tenant-b',
+          '{"authorization":"b"}'::jsonb
+        ),
+        (
+          'tenant.admin.sent-a',
+          '{"secret":"a-sent"}'::jsonb,
+          'SENT',
+          0,
+          NULL,
+          NOW() - INTERVAL '1 hour',
+          NULL,
+          'tenant-a',
+          '{"authorization":"a"}'::jsonb
+        ),
+        (
+          'tenant.admin.sent-b',
+          '{"secret":"b-sent"}'::jsonb,
+          'SENT',
+          0,
+          NULL,
+          NOW() - INTERVAL '1 hour',
+          NULL,
+          'tenant-b',
+          '{"authorization":"b"}'::jsonb
+        )
+    `;
+    const ids = await prisma.$queryRaw<
+      Array<{ id: string; eventType: string }>
+    >`
+      SELECT id, event_type AS "eventType"
+      FROM outbox_events
+      WHERE event_type LIKE 'tenant.admin.%'
+    `;
+    const byType = Object.fromEntries(
+      ids.map((row: { id: string; eventType: string }) => [
+        row.eventType,
+        row.id,
+      ]),
+    ) as Record<string, string>;
+    const tenantA = new OutboxTenantAdminService({ prisma }).forTenant(
+      'tenant-a',
+    );
+
+    const visible = await tenantA.list({ limit: 20 });
+    expect(visible.map((record) => record.eventType).sort()).toEqual([
+      'tenant.admin.failed-a',
+      'tenant.admin.sent-a',
+    ]);
+    expect(JSON.stringify(visible)).not.toContain('b-failed');
+    expect(JSON.stringify(visible)).not.toContain('tenant-b error');
+    expect(JSON.stringify(visible)).not.toContain('"authorization":"b"');
+    await expect(
+      tenantA.getById(byType['tenant.admin.failed-b']),
+    ).resolves.toBeNull();
+
+    await expect(tenantA.getStats()).resolves.toEqual({
+      pending: 0,
+      processing: 0,
+      sent: 1,
+      failed: 1,
+      oldestPendingAgeMs: null,
+      oldestProcessingAgeMs: null,
+    });
+    await expect(tenantA.getHealth({ maxFailedCount: 1 })).resolves.toEqual({
+      ok: true,
+      stats: expect.objectContaining({ sent: 1, failed: 1 }),
+      reasons: [],
+    });
+
+    await expect(
+      tenantA.retry(byType['tenant.admin.failed-b']),
+    ).resolves.toEqual({ outcome: 'not_found' });
+    await expect(
+      tenantA.markFailed(
+        byType['tenant.admin.pending-b'],
+        'tenant-a operator stop',
+      ),
+    ).resolves.toEqual({ outcome: 'not_found' });
+    await expect(
+      tenantA.retryMany([
+        byType['tenant.admin.failed-a'],
+        byType['tenant.admin.failed-b'],
+      ]),
+    ).resolves.toBe(1);
+    await expect(
+      tenantA.purgeSent({ before: new Date(), limit: 10 }),
+    ).resolves.toBe(1);
+
+    const tenantB = await prisma.$queryRaw<
+      Array<{
+        eventType: string;
+        status: string;
+        lastError: string | null;
+      }>
+    >`
+      SELECT
+        event_type AS "eventType",
+        status,
+        last_error AS "lastError"
+      FROM outbox_events
+      WHERE tenant_id = 'tenant-b'
+      ORDER BY event_type
+    `;
+    expect(tenantB).toEqual([
+      {
+        eventType: 'tenant.admin.failed-b',
+        status: 'FAILED',
+        lastError: 'tenant-b error',
+      },
+      {
+        eventType: 'tenant.admin.pending-b',
+        status: 'PENDING',
+        lastError: null,
+      },
+      {
+        eventType: 'tenant.admin.sent-b',
+        status: 'SENT',
+        lastError: null,
+      },
+    ]);
   });
 
   describe('admin retry flow', () => {

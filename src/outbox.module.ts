@@ -11,7 +11,10 @@ import {
   OUTBOX_TENANT_PROVIDER,
   OUTBOX_TRANSPORT,
 } from './outbox.constants';
-import { OutboxAdminService } from './outbox.admin.service';
+import {
+  OutboxOperatorService,
+  OutboxTenantAdminService,
+} from './outbox.admin.service';
 import { OutboxEmitter } from './outbox.emitter';
 import { OutboxExplorer } from './outbox.explorer';
 import { OutboxListener } from './outbox.listener';
@@ -48,9 +51,7 @@ export class OutboxModule {
       provide: OUTBOX_TRANSPORT,
       useClass: options.transport ?? LocalTransport,
     };
-    const tenantProvider = this.createTenantProvider(
-      options.tenancy?.provider,
-    );
+    const tenantProvider = this.createTenantProvider(options.tenancy?.provider);
 
     return {
       module: OutboxModule,
@@ -60,14 +61,16 @@ export class OutboxModule {
         optionsProvider,
         transportProvider,
         tenantProvider,
-        OutboxAdminService,
+        OutboxOperatorService,
+        OutboxTenantAdminService,
         OutboxEmitter,
         OutboxPoller,
         OutboxListener,
         OutboxExplorer,
       ],
       exports: [
-        OutboxAdminService,
+        OutboxOperatorService,
+        OutboxTenantAdminService,
         OutboxEmitter,
         OUTBOX_OPTIONS,
         OUTBOX_TRANSPORT,
@@ -97,14 +100,16 @@ export class OutboxModule {
         ...asyncProviders,
         transportProvider,
         tenantProvider,
-        OutboxAdminService,
+        OutboxOperatorService,
+        OutboxTenantAdminService,
         OutboxEmitter,
         OutboxPoller,
         OutboxListener,
         OutboxExplorer,
       ],
       exports: [
-        OutboxAdminService,
+        OutboxOperatorService,
+        OutboxTenantAdminService,
         OutboxEmitter,
         OUTBOX_OPTIONS,
         OUTBOX_TRANSPORT,
@@ -151,9 +156,7 @@ export class OutboxModule {
     };
   }
 
-  private static createAsyncProviders(
-    options: OutboxAsyncOptions,
-  ): Provider[] {
+  private static createAsyncProviders(options: OutboxAsyncOptions): Provider[] {
     if (options.useFactory) {
       return [
         {
