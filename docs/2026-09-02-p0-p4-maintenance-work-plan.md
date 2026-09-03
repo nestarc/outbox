@@ -169,11 +169,11 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 | 순서 | ID             | 우선순위 | 상태       | 크기 | 선행                                                                                 | 작업                                                                |
 | ---: | -------------- | -------- | ---------- | ---- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------- |
 |    0 | `OUT-PLAN-01`  | 문서     | `READY`    | S    | 없음                                                                                 | 이 계획만 별도 PR로 review/merge                                    |
-|    1 | `OUT-M04A`     | P0       | `READY`    | S    | 없음                                                                                 | at-least-once 전달 계약 긴급 정정                                   |
+|    1 | `OUT-M04A`     | P0       | `DONE`     | S    | 없음                                                                                 | at-least-once 전달 계약 긴급 정정                                   |
 |    2 | `OUT-M01`      | P0       | `DONE`     | L    | 없음                                                                                 | 불변 claim identity와 fenced 상태 전이                              |
 |    3 | `OUT-M02`      | P0       | `DONE`     | L    | `OUT-M01`, `OUT-M03`                                                                 | lease/heartbeat/recovery와 미시작 claim 반납                        |
 |    4 | `OUT-M03`      | P0       | `DONE`     | M    | 없음                                                                                 | poll single-flight, coalescing, background 오류 격리                |
-|    5 | `OUT-M04B`     | P0       | `READY`    | L    | `OUT-M01–03`                                                                         | 실제 PostgreSQL 다중 poller/crash-window gate                       |
+|    5 | `OUT-M04B`     | P0       | `DONE`     | L    | `OUT-M01–03`                                                                         | 실제 PostgreSQL 다중 poller/crash-window gate                       |
 |    6 | `OUT-M05`      | P1       | `READY`    | M    | `OUT-M01`                                                                            | `next_attempt_at` 기반 영속 retry 시각                              |
 |    7 | `OUT-M06`      | P1       | `DECISION` | M    | 없음                                                                                 | tenant producer provenance 정책                                     |
 |    8 | `OUT-M07`      | P1       | `BLOCKED`  | M    | `OUT-M06`, `OUT-M08`                                                                 | privileged/tenant-safe admin 경계                                   |
@@ -314,32 +314,32 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 
 ### `OUT-M04A` — at-least-once 전달 계약 긴급 정정
 
-- 상태: `P0 / READY`
+- 상태: `P0 / DONE`
 - 범위: 구현 변경 없이 현재 truth를 README와 package docs에 반영한다.
 
 완료 조건:
 
-- [ ] 절대적인 “동시에 두 번 처리되지 않는다” 문장을 제거한다.
-- [ ] polling/local/publisher가 모두 at-least-once임을 명시한다.
-- [ ] callback/broker ack 뒤 `SENT` 기록 전 crash, multi-handler partial success, 현재 stuck-row recovery/claim ownership race의 duplicate window를 설명한다.
-- [ ] consumer는 `record.id` 또는 애플리케이션이 정의한 stable key로 멱등해야 함을 예제로 보인다.
-- [ ] `idempotency_key`, `partition_key`, Outbox `SENT`의 정확한 의미와 FIFO 비보장을 명시한다.
-- [ ] 기존 0.2 spec의 Draft/역사 상태와 현재 README 권위를 구분한다.
+- [x] 절대적인 “동시에 두 번 처리되지 않는다” 문장을 제거한다.
+- [x] polling/local/publisher가 모두 at-least-once임을 명시한다.
+- [x] callback/broker ack 뒤 `SENT` 기록 전 crash, multi-handler partial success, lease/heartbeat loss와 stale completion의 duplicate window를 설명한다.
+- [x] consumer는 `record.id` 또는 애플리케이션이 정의한 stable key로 멱등해야 함을 예제로 보인다.
+- [x] `idempotency_key`, `partition_key`, Outbox `SENT`의 정확한 의미와 FIFO 비보장을 명시한다.
+- [x] 기존 0.2 spec의 Draft/역사 상태와 현재 README 권위를 구분한다.
 
 검증: 프로필 F. 비범위: M01–03 구현 완료를 거짓으로 서술하는 것.
 
 ### `OUT-M04B` — 실제 PostgreSQL 다중 poller와 crash-window release gate
 
-- 상태: `P0 / BLOCKED`; 선행 `OUT-M01–03`
+- 상태: `P0 / DONE`; 선행 `OUT-M01–03`
 
 완료 조건:
 
-- [ ] 두 app/poller가 같은 table을 처리하는 E2E가 있다.
-- [ ] SKIP LOCKED initial claim, long callback heartbeat, expired lease recovery, stale completion CAS를 각각 검증한다.
-- [ ] publisher accept 뒤 `SENT` write 전 process loss에서 duplicate 가능성과 eventual terminal state를 검증한다.
-- [ ] notification burst와 polling fallback이 coordinator 한도를 지킨다.
-- [ ] CI와 release가 이 fixture를 PostgreSQL service에서 실행한다.
-- [ ] flake를 숨기는 arbitrary sleep 대신 barrier/clock/explicit polling을 사용한다.
+- [x] 두 app/poller가 같은 table을 처리하는 E2E가 있다.
+- [x] SKIP LOCKED initial claim, long callback heartbeat, expired lease recovery, stale completion CAS를 각각 검증한다.
+- [x] publisher accept 뒤 `SENT` write 전 process loss에서 duplicate 가능성과 eventual terminal state를 검증한다.
+- [x] notification burst와 polling fallback이 coordinator 한도를 지킨다.
+- [x] CI와 release가 이 fixture를 PostgreSQL service에서 실행한다.
+- [x] flake를 숨기는 arbitrary sleep 대신 barrier/clock/explicit polling을 사용한다.
 
 검증: 프로필 B/C/E.
 
@@ -735,12 +735,14 @@ Outbox ── durable record / publisher callback ──> Jobs adapter ──> J
 
 ## 9. 작업 기록
 
-| 날짜       | Task        | 상태   | ref/PR                                     | 검증 결과                                                                                 | 다음 정확한 행동                                                       |
-| ---------- | ----------- | ------ | ------------------------------------------ | ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| 2026-09-02 | 계획 기준선 | `DONE` | `origin/main@873f95b` 조사                 | unit 88, lint/typecheck/coverage/audit 기록; fresh DB E2E 미실행                          | `OUT-PLAN-01`로 이 문서만 먼저 review/merge                            |
-| 2026-09-03 | `OUT-M01`   | `DONE` | `codex/out-m01-fenced-claims` working tree | unit 95, lint/typecheck/build PASS; PostgreSQL E2E 13 PASS; packed Prisma 7 consumer PASS | 변경 review 후 branch를 commit/push하고 `OUT-M04A` 또는 `OUT-M03` 진행 |
-| 2026-09-03 | `OUT-M03`   | `DONE` | `901865c`                                  | unit 100, lint/typecheck/clean build PASS; timer/notification burst/shutdown race PASS    | local main merge `ad96d8e`에서 `OUT-M02` 진행                          |
-| 2026-09-03 | `OUT-M02`   | `DONE` | `a14d119`                                  | unit 110, PostgreSQL E2E 16, packed Prisma 7 consumer, coverage/lint/typecheck/build PASS | local main merge `95b4849` 완료; `OUT-M04A` 진행                       |
+| 날짜       | Task        | 상태   | ref/PR                                     | 검증 결과                                                                                       | 다음 정확한 행동                                                       |
+| ---------- | ----------- | ------ | ------------------------------------------ | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| 2026-09-02 | 계획 기준선 | `DONE` | `origin/main@873f95b` 조사                 | unit 88, lint/typecheck/coverage/audit 기록; fresh DB E2E 미실행                                | `OUT-PLAN-01`로 이 문서만 먼저 review/merge                            |
+| 2026-09-03 | `OUT-M01`   | `DONE` | `codex/out-m01-fenced-claims` working tree | unit 95, lint/typecheck/build PASS; PostgreSQL E2E 13 PASS; packed Prisma 7 consumer PASS       | 변경 review 후 branch를 commit/push하고 `OUT-M04A` 또는 `OUT-M03` 진행 |
+| 2026-09-03 | `OUT-M03`   | `DONE` | `901865c`                                  | unit 100, lint/typecheck/clean build PASS; timer/notification burst/shutdown race PASS          | local main merge `ad96d8e`에서 `OUT-M02` 진행                          |
+| 2026-09-03 | `OUT-M02`   | `DONE` | `a14d119`                                  | unit 110, PostgreSQL E2E 16, packed Prisma 7 consumer, coverage/lint/typecheck/build PASS       | local main merge `95b4849` 완료; `OUT-M04A` 진행                       |
+| 2026-09-03 | `OUT-M04A`  | `DONE` | local main `9418db9` working tree          | README delivery contract/spec authority/CHANGELOG 대조; scoped format/lint/typecheck/build PASS | `OUT-M04B` PostgreSQL gate와 함께 완료                                 |
+| 2026-09-03 | `OUT-M04B`  | `DONE` | local main `9418db9` working tree          | unit 110; PostgreSQL E2E 19; packed Prisma 7 consumer; coverage/audit/lint/build PASS           | 변경 review 후 commit/push/PR                                          |
 
 ### `OUT-M01` 종료 인계
 
@@ -785,4 +787,34 @@ Unverified paths and reason: 없음. OUT-M02 범위의 profile B/C/E와 packed c
 External PR, run, release evidence: local commit a14d119와 local main merge 95b4849. push/PR/release는 수행하지 않았다.
 Remaining risk: heartbeat loss 뒤 이미 시작된 외부 side effect는 취소할 수 없어 at-least-once/idempotency가 필요하다. live heartbeat가 유지되는 영구 hang은 운영 timeout/termination이 필요하다. 실제 crash-window release gate는 OUT-M04B 범위다.
 Next exact action: 완료. local main merge 95b4849에서 다음 최저 미완료 P0인 OUT-M04A를 진행한다.
+```
+
+### `OUT-M04A` 종료 인계
+
+```text
+Task: OUT-M04A
+State: DONE
+Start ref / end ref: local main@9418db9 / local main@9418db9 working tree (uncommitted)
+Changed files: README delivery contract와 멱등 consumer 예제, historical v0.2.0 Draft authority banner, CHANGELOG, maintenance plan
+Contract / semver decision: polling/local/publisher는 모두 at-least-once다. idempotency_key와 partition_key는 metadata이며 package가 uniqueness, dedupe, ordering을 제공하지 않는다. Outbox SENT는 local handler/publisher callback 성공 뒤 fenced terminal write를 뜻하며 downstream consumer 성공을 뜻하지 않는다. 공개 API/schema/runtime 변화가 없는 문서 정정이므로 독립적으로 patch-compatible이나, OUT-M01–02의 next pre-1.0 minor release에 함께 포함한다.
+Commands and exact results: README/package/spec/code 대조 PASS; README/CHANGELOG/plan/E2E Prettier PASS; lint PASS; build typecheck와 clean build PASS; git diff --check PASS
+Unverified paths and reason: 없음. 현재 root README를 package contract로, 0.2.0 spec을 historical Draft로 명시했다.
+External PR, run, release evidence: 없음. CI/release job의 PostgreSQL E2E 실행 경로는 repository workflow에서 확인했으며 push/PR/release는 수행하지 않았다.
+Remaining risk: 멱등 side effect의 durable store와 atomicity는 consumer 책임이다. strict FIFO와 inbox/dedupe helper는 P4 연구 범위다.
+Next exact action: 완료. OUT-M04B의 실제 PostgreSQL gate와 함께 변경 review 후 commit/push/PR한다.
+```
+
+### `OUT-M04B` 종료 인계
+
+```text
+Task: OUT-M04B
+State: DONE
+Start ref / end ref: local main@9418db9 / local main@9418db9 working tree (uncommitted)
+Changed files: PostgreSQL E2E에 두 poller initial claim, publisher accept-before-SENT process-loss redelivery, notification/poll fallback coalescing gate 추가; CHANGELOG와 maintenance plan 갱신
+Contract / semver decision: 새 production 동작/API/schema 변화는 없다. M01–03의 claim token, lease heartbeat/recovery, stale CAS, single-flight coordinator를 release-blocking PostgreSQL regression으로 고정했다. 외부 side effect exactly-once는 계속 비보장이다.
+Commands and exact results: unit 9 suites/110 tests PASS; PostgreSQL E2E 1 suite/19 tests PASS; strict packed Nest 11.2.1/Prisma 7.10.0 PostgreSQL smoke PASS (sha512-1AJAvwlzHF5STzSrAa7RKwLYBSjF9jgypwFzyKEEXccmKFSqmR1GXu+8uJ5joI4r74o0UQ6ssj5Z8bG1Wn4dXQ==); coverage statements 95.33%, branches 84.81%, functions 99.05%, lines 96.06%; lint/typecheck/build PASS; production audit 0; full audit 10 dev-only (high 7, moderate 1, low 2); README/CHANGELOG/plan/E2E Prettier와 git diff --check PASS
+Unverified paths and reason: 실제 원격 GitHub Actions run은 push 전이므로 미실행이다. CI와 release workflow 모두 PostgreSQL 16 service에서 npm run test:e2e를 필수 실행하므로 새 fixture가 기존 gate에 포함됨을 정적으로 확인했다.
+External PR, run, release evidence: 없음. local disposable compose project outbox-out-m04-20260903에서 검증했고 작업 종료 시 제거했다.
+Remaining risk: process-loss test는 process kill 대신 publisher accept 직후 남는 실제 DB snapshot(PROCESSING + expired lease)을 결정적으로 구성한다. 실제 cross-package broker/worker crash/restart는 TEN-ECO-NEXT 범위다.
+Next exact action: 변경 review 후 OUT-M04A/B 파일만 commit/push/PR하고, 다음 최저 미완료 P1인 OUT-M05를 진행한다.
 ```

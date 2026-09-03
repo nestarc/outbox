@@ -423,6 +423,54 @@ When multiple application instances run against the same database (horizontal sc
 
 Delivery remains **at least once**, not exactly once. If heartbeat access is lost, the old callback cannot be forcibly cancelled: its eventual database completion is discarded, but external side effects that occurred before lease loss may overlap with a later retry. Publisher and handler side effects must therefore be idempotent, normally using `record.id` or an application-defined stable key.
 
+## Delivery Contract and Duplicate Handling
+
+Polling is the durable source of truth for both delivery modes. Local handlers and
+publisher callbacks are delivery attempts inside that polling loop, so all three
+paths have **at-least-once** semantics.
+
+| Contract                  | Meaning                                                                                                                                                                                 |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Transactional persistence | When `emit()` uses the same transaction as the business write, both commit or both roll back.                                                                                           |
+| Claim isolation           | `SKIP LOCKED`, claim tokens, and renewable leases prevent a healthy active claim from being completed by another poller. They do not make external side effects exactly once.           |
+| Local `SENT`              | Every registered local handler returned successfully and the fenced `SENT` update was stored. An earlier handler may already have produced a side effect before a later handler failed. |
+| Publisher `SENT`          | The publisher callback resolved and the fenced `SENT` update was stored. It does not mean that a downstream broker consumer or Jobs handler completed.                                  |
+| `idempotency_key`         | Application metadata carried with the record. The package does not enforce uniqueness or deduplicate producers or consumers with it.                                                    |
+| `partition_key`           | Routing metadata for a custom publisher. It does not serialize claims or provide partition, aggregate, or global FIFO.                                                                  |
+| Ordering                  | Strict global, aggregate, and partition FIFO are not guaranteed. Retries, multiple pollers, and callback duration can change observation order.                                         |
+
+Duplicates can occur in these windows:
+
+- A local callback or broker publish succeeds, then the process stops before the
+  `SENT` update. The expired claim is recovered and the whole delivery attempt runs
+  again.
+- Local handlers run sequentially. If one handler succeeds and a later handler
+  fails, retry starts again from the first handler.
+- If heartbeat access is lost, the lease can expire while the old callback is
+  still running. Fencing rejects its late database completion, but cannot undo or
+  cancel an external side effect; that side effect can overlap a new attempt.
+
+Make each handler and publisher safe to repeat. A common pattern is to use
+`context.eventId` (the same value as `record.id`) as a durable consumer key and
+couple the dedupe write atomically with the consumer side effect:
+
+```typescript
+@OnOutboxEvent(OrderCreatedEvent)
+async handleOrderCreated(
+  payload: { orderId: string },
+  context: OutboxHandlerContext,
+) {
+  await this.idempotencyStore.runOnce(context.eventId, async () => {
+    await this.orders.applyCreated(payload.orderId);
+  });
+}
+```
+
+An application-defined stable key can be used instead when multiple outbox records
+represent the same logical operation. Storing a value in `idempotency_key` only
+transports that key; the consumer still owns durable deduplication and its atomicity
+boundary.
+
 ## Graceful Shutdown
 
 When the NestJS application receives a shutdown signal:

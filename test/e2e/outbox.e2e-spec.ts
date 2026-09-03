@@ -7,9 +7,11 @@ import { OutboxModule } from '../../src/outbox.module';
 import { OutboxAdminService } from '../../src/outbox.admin.service';
 import { OutboxEmitter } from '../../src/outbox.emitter';
 import { OutboxEvent } from '../../src/outbox.event';
+import { OutboxListener } from '../../src/outbox.listener';
 import { OutboxPoller } from '../../src/outbox.poller';
 import { OnOutboxEvent } from '../../src/outbox.decorator';
 import type { OutboxHandlerContext } from '../../src/interfaces/outbox-handler-context.interface';
+import type { OutboxNotificationClient } from '../../src/interfaces/outbox-wakeup.interface';
 import type { OutboxRecord } from '../../src/interfaces/outbox-record.interface';
 
 // --- Test event ---
@@ -337,6 +339,61 @@ describe('Outbox E2E', () => {
     expect(publisher.publish).toHaveBeenCalledTimes(1);
   });
 
+  it('lets two pollers claim distinct rows without duplicate initial delivery', async () => {
+    await prisma.$executeRaw`
+      INSERT INTO outbox_events (event_type, payload)
+      VALUES
+        ('claim.concurrent-a', '{}'::jsonb),
+        ('claim.concurrent-b', '{}'::jsonb)
+    `;
+    let startedCount = 0;
+    let reportBothDispatchesStarted!: () => void;
+    const bothDispatchesStarted = new Promise<void>((resolve) => {
+      reportBothDispatchesStarted = resolve;
+    });
+    let releaseDispatches!: () => void;
+    const dispatchBarrier = new Promise<void>((resolve) => {
+      releaseDispatches = resolve;
+    });
+    const deliveredIds: string[] = [];
+    const publisher = {
+      publish: jest.fn(async (record: OutboxRecord) => {
+        deliveredIds.push(record.id);
+        startedCount++;
+        if (startedCount === 2) reportBothDispatchesStarted();
+        await dispatchBarrier;
+      }),
+    };
+    const createPoller = () =>
+      new OutboxPoller(
+        {
+          prisma,
+          polling: { enabled: false, batchSize: 1 },
+          delivery: { mode: 'publisher' },
+          lease: { duration: 1_000, heartbeatInterval: 100 },
+        },
+        publisher,
+        { getHandlers: jest.fn() } as any,
+        { addInterval: jest.fn(), deleteInterval: jest.fn() } as any,
+      );
+
+    const polls = Promise.all([createPoller().poll(), createPoller().poll()]);
+    await bothDispatchesStarted;
+
+    expect(new Set(deliveredIds).size).toBe(2);
+    releaseDispatches();
+    await polls;
+
+    const rows = await prisma.$queryRaw<Array<{ status: string }>>`
+      SELECT status
+      FROM outbox_events
+      WHERE event_type IN ('claim.concurrent-a', 'claim.concurrent-b')
+      ORDER BY event_type
+    `;
+    expect(rows).toEqual([{ status: 'SENT' }, { status: 'SENT' }]);
+    expect(publisher.publish).toHaveBeenCalledTimes(2);
+  });
+
   it('recovers an expired process-loss lease without spending retry budget', async () => {
     await prisma.$executeRaw`
       INSERT INTO outbox_events (
@@ -404,6 +461,162 @@ describe('Outbox E2E', () => {
       { status: 'SENT', retryCount: 0 },
       { status: 'SENT', retryCount: 0 },
     ]);
+  });
+
+  it('redelivers after publisher acceptance is persisted before SENT', async () => {
+    await prisma.$executeRaw`
+      INSERT INTO outbox_events (event_type, payload)
+      VALUES ('publisher.ack-before-sent-loss', '{}'::jsonb)
+    `;
+    const acceptedIds: string[] = [];
+    const publisher = {
+      publish: jest.fn(async (record: OutboxRecord) => {
+        acceptedIds.push(record.id);
+        if (acceptedIds.length === 1) {
+          // Model the durable database snapshot left when a process disappears
+          // after the publisher accepts the record but before markSent can win.
+          await prisma.$executeRaw`
+            UPDATE outbox_events
+            SET lease_expires_at = NOW() - INTERVAL '1 second'
+            WHERE id = ${record.id}::uuid
+              AND status = 'PROCESSING'
+          `;
+        }
+      }),
+    };
+    const createPoller = () =>
+      new OutboxPoller(
+        {
+          prisma,
+          polling: { enabled: false, batchSize: 1 },
+          delivery: { mode: 'publisher' },
+          lease: { duration: 1_000, heartbeatInterval: 100 },
+        },
+        publisher,
+        { getHandlers: jest.fn() } as any,
+        { addInterval: jest.fn(), deleteInterval: jest.fn() } as any,
+      );
+    const crashedPoller = createPoller();
+    const recoveryPoller = createPoller();
+
+    await crashedPoller.poll();
+
+    const processing = await prisma.$queryRaw<
+      Array<{ id: string; status: string; processedAt: Date | null }>
+    >`
+      SELECT id, status, processed_at AS "processedAt"
+      FROM outbox_events
+      WHERE event_type = 'publisher.ack-before-sent-loss'
+    `;
+    expect(processing).toEqual([
+      {
+        id: acceptedIds[0],
+        status: 'PROCESSING',
+        processedAt: null,
+      },
+    ]);
+
+    for (let cycle = 0; cycle < 10; cycle++) {
+      await recoveryPoller.poll();
+    }
+
+    const terminal = await prisma.$queryRaw<
+      Array<{ status: string; retryCount: number; processedAt: Date | null }>
+    >`
+      SELECT
+        status,
+        retry_count AS "retryCount",
+        processed_at AS "processedAt"
+      FROM outbox_events
+      WHERE event_type = 'publisher.ack-before-sent-loss'
+    `;
+    expect(acceptedIds).toEqual([processing[0].id, processing[0].id]);
+    expect(terminal).toEqual([
+      {
+        status: 'SENT',
+        retryCount: 0,
+        processedAt: expect.any(Date),
+      },
+    ]);
+  });
+
+  it('coalesces notification bursts with polling fallback against PostgreSQL', async () => {
+    let reportFirstQueryStarted!: () => void;
+    const firstQueryStarted = new Promise<void>((resolve) => {
+      reportFirstQueryStarted = resolve;
+    });
+    let releaseFirstQuery!: () => void;
+    const firstQueryBarrier = new Promise<void>((resolve) => {
+      releaseFirstQuery = resolve;
+    });
+    let queryCount = 0;
+    let activeQueries = 0;
+    let maxActiveQueries = 0;
+    const coordinatedPrisma = {
+      $queryRaw: async (...args: any[]) => {
+        queryCount++;
+        activeQueries++;
+        maxActiveQueries = Math.max(maxActiveQueries, activeQueries);
+        try {
+          if (queryCount === 1) {
+            reportFirstQueryStarted();
+            await firstQueryBarrier;
+          }
+          return await Reflect.apply(prisma.$queryRaw, prisma, args);
+        } finally {
+          activeQueries--;
+        }
+      },
+      $executeRaw: (...args: any[]) =>
+        Reflect.apply(prisma.$executeRaw, prisma, args),
+    };
+    const notificationHandlers: Record<
+      string,
+      Array<(payload: any) => void>
+    > = {};
+    const notificationClient: OutboxNotificationClient = {
+      connect: jest.fn().mockResolvedValue(undefined),
+      query: jest.fn().mockResolvedValue(undefined),
+      end: jest.fn().mockResolvedValue(undefined),
+      on: jest.fn((event: string, handler: (payload: any) => void) => {
+        notificationHandlers[event] ??= [];
+        notificationHandlers[event].push(handler);
+        return notificationClient;
+      }),
+    };
+    const options = {
+      prisma: coordinatedPrisma,
+      polling: { enabled: false, batchSize: 1 },
+      wakeup: {
+        enabled: true,
+        channel: 'outbox_p0_gate',
+        clientFactory: () => notificationClient,
+      },
+    };
+    const poller = new OutboxPoller(
+      options,
+      { publish: jest.fn().mockResolvedValue(undefined) },
+      { getHandlers: jest.fn() } as any,
+      { addInterval: jest.fn(), deleteInterval: jest.fn() } as any,
+    );
+    const listener = new OutboxListener(options, poller);
+    await listener.onModuleInit();
+
+    notificationHandlers.notification[0]({ channel: 'outbox_p0_gate' });
+    await firstQueryStarted;
+    for (let index = 0; index < 100; index++) {
+      notificationHandlers.notification[0]({ channel: 'outbox_p0_gate' });
+    }
+    poller.requestPoll();
+    const completion = poller.poll();
+
+    expect(queryCount).toBe(1);
+    releaseFirstQuery();
+    await completion;
+    await listener.onApplicationShutdown();
+
+    expect(queryCount).toBe(2);
+    expect(maxActiveQueries).toBe(1);
   });
 
   it.each([

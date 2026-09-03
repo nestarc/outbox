@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The README now defines polling, local-handler, and publisher delivery as
+  at-least-once, documents every known duplicate window, and clarifies that
+  `idempotency_key`, `partition_key`, and Outbox `SENT` do not provide consumer
+  deduplication, FIFO, or downstream-completion guarantees.
 - Pollers now claim one record on demand and protect its active callback with a
   renewable PostgreSQL lease. Recovery only requeues expired leases, does not
   consume retry budget, and stale completions require both the original claim
@@ -30,6 +34,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `OutboxRecord`, dispatch contexts, and handler contexts now expose readonly
   properties at compile time. Runtime freezing is intentionally not part of
   the contract.
+
+### Testing
+
+- PostgreSQL E2E now gates concurrent two-poller initial claims, active lease
+  heartbeats, expired-lease recovery, stale completions, publisher acceptance
+  before `SENT` process loss, and notification/poll fallback coalescing. The
+  existing CI and release PostgreSQL jobs run this suite for their supported
+  runtime tuples.
 
 ### Migration
 
