@@ -236,28 +236,29 @@ CREATE INDEX IF NOT EXISTS idx_outbox_tenant_pending
 
 All options passed to `OutboxModule.forRoot()` or the factory returned by `OutboxModule.forRootAsync()`.
 
-| Option                            | Type                            | Default                      | Description                                                                                                                                                                         |
-| --------------------------------- | ------------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `prisma`                          | class ref / instance            | **required**                 | `PrismaService` class reference (`forRoot`, must be `@Global`) or instance (`forRootAsync`). See `PrismaLike` type for minimum interface.                                           |
-| `polling.enabled`                 | `boolean`                       | `true`                       | Enable or disable the polling scheduler                                                                                                                                             |
-| `polling.interval`                | `number`                        | `5000`                       | Milliseconds between polling cycles                                                                                                                                                 |
-| `polling.batchSize`               | `number`                        | `100`                        | Maximum events processed per polling cycle                                                                                                                                          |
-| `retry.maxRetries`                | `number`                        | `5`                          | Maximum delivery attempts before marking an event `FAILED`                                                                                                                          |
-| `retry.backoff`                   | `'fixed' \| 'exponential'`      | `'exponential'`              | Backoff strategy between retries                                                                                                                                                    |
-| `retry.initialDelay`              | `number`                        | `1000`                       | Initial delay in ms (base for exponential, constant for fixed)                                                                                                                      |
-| `retry.maxDelay`                  | `number`                        | `86400000`                   | Maximum persisted retry delay in ms. Must be no greater than `2147483647`; exponential delays saturate at this value.                                                               |
-| `delivery.mode`                   | `'local' \| 'publisher'`        | `'local'`                    | `local` requires registered `@OnOutboxEvent()` handlers; `publisher` sends records to a broker-style transport without requiring local handlers.                                    |
-| `transport`                       | `Type`                          | `LocalTransport`             | Custom transport class implementing `OutboxTransport` or `OutboxPublisher`.                                                                                                         |
-| `tenancy.provider`                | `OutboxTenantProvider` / `Type` | none                         | Optional tenant provider. `emit()` uses explicit `tenantId` first, then `provider.getTenantId()`. `LocalTransport` restores context with `provider.runWithTenant()` when available. |
-| `hooks`                           | `OutboxHooks`                   | none                         | Optional lifecycle callbacks for emit, poll, dispatch success/failure, retry, and dead-letter metrics/tracing. Hook failures are logged and swallowed.                              |
-| `wakeup.enabled`                  | `boolean`                       | `false`                      | Enable PostgreSQL `LISTEN/NOTIFY` wakeup in addition to polling. Requires `pg` or a custom `clientFactory`.                                                                         |
-| `wakeup.channel`                  | `string`                        | `'outbox_events'`            | PostgreSQL notification channel.                                                                                                                                                    |
-| `wakeup.connectionString`         | `string`                        | `pg` default                 | Connection string used by the notification client when `pg` is installed.                                                                                                           |
-| `lease.duration`                  | `number`                        | `stuckThreshold` or `300000` | Claim lifetime in ms. Active callbacks renew the lease; expired claims are eligible for recovery.                                                                                   |
-| `lease.heartbeatInterval`         | `number`                        | `lease.duration / 3`         | Heartbeat interval in ms. Must be positive and less than half of `lease.duration`.                                                                                                  |
-| `lease.heartbeatFailureTolerance` | `number`                        | `1`                          | Consecutive heartbeat errors tolerated before the claimant abandons completion and lets the lease expire.                                                                           |
-| `isGlobal`                        | `boolean`                       | `true`                       | Register the module globally so `OutboxEmitter` is available everywhere                                                                                                             |
-| `stuckThreshold`                  | `number`                        | `300000`                     | Deprecated compatibility alias for `lease.duration`; ignored when `lease.duration` is set.                                                                                          |
+| Option                            | Type                                    | Default                      | Description                                                                                                                                            |
+| --------------------------------- | --------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `prisma`                          | class ref / instance                    | **required**                 | `PrismaService` class reference (`forRoot`, must be `@Global`) or instance (`forRootAsync`). See `PrismaLike` type for minimum interface.              |
+| `polling.enabled`                 | `boolean`                               | `true`                       | Enable or disable the polling scheduler                                                                                                                |
+| `polling.interval`                | `number`                                | `5000`                       | Milliseconds between polling cycles                                                                                                                    |
+| `polling.batchSize`               | `number`                                | `100`                        | Maximum events processed per polling cycle                                                                                                             |
+| `retry.maxRetries`                | `number`                                | `5`                          | Maximum delivery attempts before marking an event `FAILED`                                                                                             |
+| `retry.backoff`                   | `'fixed' \| 'exponential'`              | `'exponential'`              | Backoff strategy between retries                                                                                                                       |
+| `retry.initialDelay`              | `number`                                | `1000`                       | Initial delay in ms (base for exponential, constant for fixed)                                                                                         |
+| `retry.maxDelay`                  | `number`                                | `86400000`                   | Maximum persisted retry delay in ms. Must be no greater than `2147483647`; exponential delays saturate at this value.                                  |
+| `delivery.mode`                   | `'local' \| 'publisher'`                | `'local'`                    | `local` requires registered `@OnOutboxEvent()` handlers; `publisher` sends records to a broker-style transport without requiring local handlers.       |
+| `transport`                       | `Type`                                  | `LocalTransport`             | Custom transport class implementing `OutboxTransport` or `OutboxPublisher`.                                                                            |
+| `tenancy.provider`                | `OutboxTenantProvider` / `Type`         | none                         | Optional trusted tenant provider. `LocalTransport` restores context with `provider.runWithTenant()` when available.                                    |
+| `tenancy.policy`                  | `optional \| required \| require-match` | `optional`                   | Producer provenance policy. `required` rejects a missing tenant; `require-match` also compares an explicit tenant with the provider exactly.           |
+| `hooks`                           | `OutboxHooks`                           | none                         | Optional lifecycle callbacks for emit, poll, dispatch success/failure, retry, and dead-letter metrics/tracing. Hook failures are logged and swallowed. |
+| `wakeup.enabled`                  | `boolean`                               | `false`                      | Enable PostgreSQL `LISTEN/NOTIFY` wakeup in addition to polling. Requires `pg` or a custom `clientFactory`.                                            |
+| `wakeup.channel`                  | `string`                                | `'outbox_events'`            | PostgreSQL notification channel.                                                                                                                       |
+| `wakeup.connectionString`         | `string`                                | `pg` default                 | Connection string used by the notification client when `pg` is installed.                                                                              |
+| `lease.duration`                  | `number`                                | `stuckThreshold` or `300000` | Claim lifetime in ms. Active callbacks renew the lease; expired claims are eligible for recovery.                                                      |
+| `lease.heartbeatInterval`         | `number`                                | `lease.duration / 3`         | Heartbeat interval in ms. Must be positive and less than half of `lease.duration`.                                                                     |
+| `lease.heartbeatFailureTolerance` | `number`                                | `1`                          | Consecutive heartbeat errors tolerated before the claimant abandons completion and lets the lease expire.                                              |
+| `isGlobal`                        | `boolean`                               | `true`                       | Register the module globally so `OutboxEmitter` is available everywhere                                                                                |
+| `stuckThreshold`                  | `number`                                | `300000`                     | Deprecated compatibility alias for `lease.duration`; ignored when `lease.duration` is set.                                                             |
 
 ### Async registration
 
@@ -346,15 +347,31 @@ OutboxModule.forRoot({
   prisma: PrismaService,
   tenancy: {
     provider: TenantContextProvider,
+    policy: 'require-match',
   },
 });
 ```
 
-Tenant resolution order:
+Tenant IDs are validated before any outbox SQL runs. They must be strings,
+non-empty, and free of leading or trailing whitespace; the package never trims
+or repairs them. `tenantId: undefined` is treated as absent and falls back to
+the provider. `tenantId: null` is rejected. Use the explicit global-event escape
+hatch when an event intentionally belongs to no tenant:
 
-1. `emit(tx, event, { tenantId })`
-2. `tenancy.provider.getTenantId()`
-3. `NULL`
+```typescript
+await outbox.emit(tx, new CatalogRebuiltEvent(), {
+  tenantScope: 'global',
+});
+```
+
+| Policy          | Explicit `tenantId`                 | No explicit `tenantId`                     | No resolved tenant |
+| --------------- | ----------------------------------- | ------------------------------------------ | ------------------ |
+| `optional`      | Used as-is; provider is not queried | Uses `provider.getTenantId()` when present | Stores `NULL`      |
+| `required`      | Used as-is; provider is not queried | Uses `provider.getTenantId()` when present | Rejects            |
+| `require-match` | Must exactly match the provider     | Uses `provider.getTenantId()`              | Rejects            |
+
+`tenantScope: 'global'` deliberately stores `NULL` under every policy and does
+not query the provider. It cannot be combined with `tenantId`.
 
 If `LocalTransport` receives a record with `tenantId` and the provider implements `runWithTenant()`, local handlers run inside that tenant context.
 

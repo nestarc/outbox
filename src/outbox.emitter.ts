@@ -11,7 +11,10 @@ import type {
 import type { OutboxEmitContext } from './interfaces/outbox-hooks.interface';
 import type { OutboxOptions } from './interfaces/outbox-options.interface';
 import type { PrismaTransactionClient } from './interfaces/prisma-transaction-client.interface';
-import type { OutboxTenantProvider } from './interfaces/outbox-tenancy.interface';
+import type {
+  OutboxTenantPolicy,
+  OutboxTenantProvider,
+} from './interfaces/outbox-tenancy.interface';
 import type { OutboxEvent } from './outbox.event';
 
 interface PreparedOutboxRow {
@@ -198,13 +201,96 @@ export class OutboxEmitter {
   private async resolveTenantId(
     options?: OutboxEmitOptions,
   ): Promise<string | null> {
-    if (options && 'tenantId' in options) {
-      return options.tenantId ?? null;
+    const tenantId = (options as { tenantId?: unknown } | undefined)?.tenantId;
+    const tenantScope = (options as { tenantScope?: unknown } | undefined)
+      ?.tenantScope;
+    const policy = this.resolveTenantPolicy();
+
+    if (tenantScope !== undefined) {
+      if (tenantScope !== 'global') {
+        throw new Error('Outbox tenantScope must be "global" when provided');
+      }
+      if (tenantId !== undefined) {
+        throw new Error(
+          'Outbox emit options cannot combine tenantId with tenantScope',
+        );
+      }
+      return null;
     }
 
+    if (tenantId === null) {
+      throw new Error(
+        'Outbox tenantId cannot be null; use tenantScope: "global" for a global event',
+      );
+    }
+
+    if (tenantId !== undefined) {
+      const explicitTenantId = this.validateTenantId(
+        tenantId,
+        'explicit tenantId',
+      );
+
+      if (policy !== 'require-match') {
+        return explicitTenantId;
+      }
+
+      const providerTenantId = await this.getProviderTenantId();
+      if (providerTenantId === null) {
+        throw new Error(
+          'Outbox tenancy policy "require-match" requires a provider tenantId',
+        );
+      }
+      if (providerTenantId !== explicitTenantId) {
+        throw new Error(
+          'Outbox explicit tenantId does not match the provider tenantId',
+        );
+      }
+      return explicitTenantId;
+    }
+
+    const providerTenantId = await this.getProviderTenantId();
+    if (providerTenantId !== null) return providerTenantId;
+
+    if (policy === 'optional') return null;
+
+    throw new Error(
+      `Outbox tenancy policy "${policy}" requires a tenantId or tenantScope: "global"`,
+    );
+  }
+
+  private resolveTenantPolicy(): OutboxTenantPolicy {
+    const policy = this.options.tenancy?.policy ?? 'optional';
+    if (
+      policy !== 'optional' &&
+      policy !== 'required' &&
+      policy !== 'require-match'
+    ) {
+      throw new Error(
+        'Outbox tenancy.policy must be one of: optional, required, require-match',
+      );
+    }
+    return policy;
+  }
+
+  private async getProviderTenantId(): Promise<string | null> {
     const provider = this.resolveTenantProvider();
-    const tenantId = await provider?.getTenantId?.();
-    return tenantId ?? null;
+    if (!provider?.getTenantId) return null;
+
+    const tenantId: unknown = await provider.getTenantId();
+    if (tenantId === null || tenantId === undefined) return null;
+    return this.validateTenantId(tenantId, 'provider tenantId');
+  }
+
+  private validateTenantId(value: unknown, source: string): string {
+    if (typeof value !== 'string') {
+      throw new Error(`Outbox ${source} must be a string`);
+    }
+    if (value.length === 0 || value.trim() !== value) {
+      throw new Error(
+        `Outbox ${source} must be non-empty and have no leading or trailing whitespace`,
+      );
+    }
+    return value;
   }
 
   private resolveTenantProvider(): OutboxTenantProvider | undefined {

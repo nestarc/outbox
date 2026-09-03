@@ -39,9 +39,8 @@ class ModernConsumerListener {
 }
 
 function migrationStatements(): string[] {
-  const migrationPath = require.resolve(
-    '@nestarc/outbox/src/sql/create-outbox-table.sql',
-  );
+  const migrationPath =
+    require.resolve('@nestarc/outbox/src/sql/create-outbox-table.sql');
   return fs
     .readFileSync(migrationPath, 'utf8')
     .replace(/^\s*--.*$/gm, '')
@@ -91,6 +90,10 @@ async function main(): Promise<void> {
           prisma,
           polling: { enabled: true, interval: 50, batchSize: 10 },
           retry: { maxRetries: 3, backoff: 'fixed', initialDelay: 50 },
+          tenancy: {
+            policy: 'require-match',
+            provider: { getTenantId: () => 'tenant-modern' },
+          },
         }),
       ],
       providers: [ModernConsumerListener],

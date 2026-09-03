@@ -175,10 +175,10 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 |    4 | `OUT-M03`      | P0       | `DONE`     | M    | 없음                                                                                 | poll single-flight, coalescing, background 오류 격리                |
 |    5 | `OUT-M04B`     | P0       | `DONE`     | L    | `OUT-M01–03`                                                                         | 실제 PostgreSQL 다중 poller/crash-window gate                       |
 |    6 | `OUT-M05`      | P1       | `DONE`     | M    | `OUT-M01`                                                                            | `next_attempt_at` 기반 영속 retry 시각                              |
-|    7 | `OUT-M06`      | P1       | `DECISION` | M    | 없음                                                                                 | tenant producer provenance 정책                                     |
+|    7 | `OUT-M06`      | P1       | `DONE`     | M    | 없음                                                                                 | tenant producer provenance 정책                                     |
 |    8 | `OUT-M07`      | P1       | `BLOCKED`  | M    | `OUT-M06`, `OUT-M08`                                                                 | privileged/tenant-safe admin 경계                                   |
-|    9 | `OUT-M08`      | P1       | `BLOCKED`  | M    | `OUT-M01–02`, `OUT-M05`                                                              | admin 상태 전이 CAS                                                 |
-|   10 | `OUT-M09`      | P1       | `BLOCKED`  | M    | `OUT-M03`                                                                            | LISTEN/NOTIFY degrade/reconnect lifecycle                           |
+|    9 | `OUT-M08`      | P1       | `READY`    | M    | `OUT-M01–02`, `OUT-M05`                                                              | admin 상태 전이 CAS                                                 |
+|   10 | `OUT-M09`      | P1       | `READY`    | M    | `OUT-M03`                                                                            | LISTEN/NOTIFY degrade/reconnect lifecycle                           |
 |   11 | `OUT-M10`      | P1       | `READY`    | M    | 없음                                                                                 | runtime option/state invariant validation                           |
 |   12 | `OUT-M11`      | P1       | `READY`    | M    | 없음                                                                                 | `forRootAsync` DI와 async option 계약                               |
 |   13 | `OUT-M12`      | P1       | `READY`    | M    | 없음                                                                                 | release authorization, least privilege, immutable actions           |
@@ -364,17 +364,17 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 
 ### `OUT-M06` — tenant producer provenance 정책
 
-- 상태: `P1 / DECISION`
+- 상태: `P1 / DONE`
 - 문제: property presence만 override로 처리해 `{tenantId: undefined}`가 provider fallback을 막고 NULL을 저장한다. blank/null/provider mismatch 정책이 없다.
 
 완료 조건:
 
-- [ ] `optional`, `required`, `require-match` 또는 동등한 명시 정책을 ADR로 고정한다.
-- [ ] undefined는 우발적 override가 아니며 provider fallback 계약을 따른다.
-- [ ] blank/whitespace/invalid type은 DB mutation 전에 거부한다.
-- [ ] explicit tenant와 trusted provider가 충돌하면 정책에 따라 fail-closed한다.
-- [ ] global event는 우발적 null이 아닌 명시적 escape hatch로 표현한다.
-- [ ] tenant ID를 trim/repair하지 않고 canonical producer value를 사용하거나 거부한다.
+- [x] `optional`, `required`, `require-match` 또는 동등한 명시 정책을 ADR로 고정한다.
+- [x] undefined는 우발적 override가 아니며 provider fallback 계약을 따른다.
+- [x] blank/whitespace/invalid type은 DB mutation 전에 거부한다.
+- [x] explicit tenant와 trusted provider가 충돌하면 정책에 따라 fail-closed한다.
+- [x] global event는 우발적 null이 아닌 명시적 escape hatch로 표현한다.
+- [x] tenant ID를 trim/repair하지 않고 canonical producer value를 사용하거나 거부한다.
 
 검증: 프로필 A/B/D. 비범위: `@nestarc/tenancy` hard dependency.
 
@@ -394,7 +394,7 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 
 ### `OUT-M08` — admin 상태 전이 CAS
 
-- 상태: `P1 / BLOCKED`; 선행 `OUT-M01–02`, `OUT-M05`
+- 상태: `P1 / READY`; 선행 `OUT-M01–02`, `OUT-M05`
 
 완료 조건:
 
@@ -408,7 +408,7 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 
 ### `OUT-M09` — LISTEN/NOTIFY degrade/reconnect lifecycle
 
-- 상태: `P1 / BLOCKED`; 선행 `OUT-M03`
+- 상태: `P1 / READY`; 선행 `OUT-M03`
 
 완료 조건:
 
@@ -744,6 +744,7 @@ Outbox ── durable record / publisher callback ──> Jobs adapter ──> J
 | 2026-09-03 | `OUT-M04A`  | `DONE` | local main `9418db9` working tree                | README delivery contract/spec authority/CHANGELOG 대조; scoped format/lint/typecheck/build PASS | `OUT-M04B` PostgreSQL gate와 함께 완료                                 |
 | 2026-09-03 | `OUT-M04B`  | `DONE` | local main `9418db9` working tree                | unit 110; PostgreSQL E2E 19; packed Prisma 7 consumer; coverage/audit/lint/build PASS           | 변경 review 후 commit/push/PR                                          |
 | 2026-09-03 | `OUT-M05`   | `DONE` | `codex/out-m05-persisted-retry-due` working tree | unit 115; PostgreSQL E2E 22; packed Prisma 7 consumer; lint/typecheck/build PASS                | 변경 review 후 commit/push/PR하고 `OUT-M06` 정책 결정                  |
+| 2026-09-03 | `OUT-M06`   | `DONE` | `codex/out-m06-tenant-provenance` working tree   | unit 129; PostgreSQL E2E 22; packed Prisma 7 consumer; lint/typecheck/clean build PASS          | 변경 review 후 commit/push/PR하고 `OUT-M08` admin 상태 전이 CAS 진행   |
 
 ### `OUT-M01` 종료 인계
 
@@ -833,4 +834,19 @@ Unverified paths and reason: OUT-M19가 소유한 historical v0.1/v0.2 통합 up
 External PR, run, release evidence: 없음. commit/push/PR/release는 수행하지 않았다.
 Remaining risk: 0.2.x poller는 next_attempt_at을 쓰지 않으므로 migration 전에 drain해야 한다. migration 시 기존 PENDING/PROCESSING retry는 보수적으로 즉시 due가 된다. 대량 pending query/index 성능 기준은 OUT-M18 범위다.
 Next exact action: diff를 review한 뒤 OUT-M05 파일만 commit/push/PR하고, 다음 최저 미완료 P1인 OUT-M06 tenant producer provenance 정책을 결정한다.
+```
+
+### `OUT-M06` 종료 인계
+
+```text
+Task: OUT-M06
+State: DONE
+Start ref / end ref: local main@8bfd5b90414686797fe76dea65428eb4a186b7ad / codex/out-m06-tenant-provenance working tree (uncommitted)
+Changed files: emitter tenant resolution/validation, emit/tenancy/hook public types and exports, unit and strict packed-consumer contracts, README/CHANGELOG, ADR 0003, maintenance plan
+Contract / semver decision: tenancy.policy는 optional(기본, non-tenant 호환), required, require-match를 제공한다. undefined는 provider fallback이고 null은 거부하며 global event는 tenantScope: 'global'로만 명시한다. explicit/provider 값은 trim/coerce 없이 non-empty canonical string만 허용하고 require-match는 exact mismatch/provider 부재를 fail-closed한다. public option 추가와 tenantId null type tightening 때문에 앞선 작업과 같은 next pre-1.0 minor 대상으로 결정했다.
+Commands and exact results: 첫 RED focused emitter 1 FAIL/12 PASS ({tenantId: undefined}가 NULL); 구현 뒤 focused emitter 26 PASS; full unit 9 suites/129 tests PASS; lint PASS; build typecheck PASS; clean build PASS; PostgreSQL 16 E2E 1 suite/22 tests PASS; strict packed Nest 11.2.1/Prisma 7.10.0 install/typecheck/build/PostgreSQL smoke PASS (sha512-Ej61y6CwrJF45BnE/Pi3mp+TzBuC2ewBShUYVfKXuRgouYNAZsT0F6QgRb6SFedvTxpiYzUMknJ+2oKUR+p1TA==); scoped Prettier와 git diff --check PASS
+Unverified paths and reason: 원격 GitHub Actions는 push 전이므로 미실행이다. OUT-M20A가 소유한 publisher final FAILED/provider-derived tenant 전용 PostgreSQL E2E는 중복 추가하지 않았다.
+External PR, run, release evidence: 없음. local disposable compose project outbox-out-m06-20260903에서 검증했으며 commit/push/PR/release는 수행하지 않았다.
+Remaining risk: optional 정책은 tenant가 없을 때 호환성을 위해 NULL을 허용하므로 tenant attribution이 필수인 애플리케이션은 required 또는 require-match를 선택해야 한다. tenant-safe admin authorization은 OUT-M07, async provider DI는 OUT-M11 범위다.
+Next exact action: diff를 review한 뒤 OUT-M06 파일만 commit/push/PR하고, 선행이 완료된 OUT-M08 admin 상태 전이 CAS를 진행한 뒤 OUT-M07 tenant-safe admin 경계를 연다.
 ```
