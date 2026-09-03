@@ -1098,7 +1098,9 @@ describe('Outbox E2E', () => {
     `;
     const admin = new OutboxAdminService({ prisma });
 
-    await expect(admin.retry(failed.id)).resolves.toBe(true);
+    await expect(admin.retry(failed.id)).resolves.toEqual({
+      outcome: 'applied',
+    });
 
     const [retried] = await prisma.$queryRaw<
       Array<{
@@ -1131,6 +1133,287 @@ describe('Outbox E2E', () => {
     expect(retried.nextAttemptAt.getTime()).toBeLessThanOrEqual(
       retried.databaseNow.getTime(),
     );
+  });
+
+  it('enforces the admin source-state matrix and mutation invariants', async () => {
+    await prisma.$executeRaw`
+      INSERT INTO outbox_events (
+        event_type,
+        payload,
+        status,
+        retry_count,
+        last_error,
+        processed_at,
+        next_attempt_at,
+        claim_token,
+        lease_expires_at
+      ) VALUES
+        (
+          'admin.pending',
+          '{}'::jsonb,
+          'PENDING',
+          1,
+          NULL,
+          NULL,
+          NOW(),
+          NULL,
+          NULL
+        ),
+        (
+          'admin.processing',
+          '{}'::jsonb,
+          'PROCESSING',
+          0,
+          NULL,
+          NULL,
+          NULL,
+          gen_random_uuid(),
+          NOW() + INTERVAL '1 minute'
+        ),
+        (
+          'admin.sent',
+          '{}'::jsonb,
+          'SENT',
+          0,
+          NULL,
+          NOW() - INTERVAL '1 hour',
+          NULL,
+          NULL,
+          NULL
+        ),
+        (
+          'admin.failed',
+          '{}'::jsonb,
+          'FAILED',
+          2,
+          'delivery stopped',
+          NOW() - INTERVAL '1 hour',
+          NULL,
+          NULL,
+          NULL
+        )
+    `;
+    const rows = await prisma.$queryRaw<
+      Array<{ id: string; eventType: string }>
+    >`
+      SELECT id, event_type AS "eventType"
+      FROM outbox_events
+      WHERE event_type LIKE 'admin.%'
+    `;
+    const ids = Object.fromEntries(
+      rows.map((row: { id: string; eventType: string }) => [
+        row.eventType,
+        row.id,
+      ]),
+    ) as Record<string, string>;
+    const admin = new OutboxAdminService({ prisma });
+
+    await expect(
+      admin.markFailed(ids['admin.pending'], 'operator stop'),
+    ).resolves.toEqual({ outcome: 'applied' });
+    await expect(
+      admin.markFailed(ids['admin.processing'], 'operator stop'),
+    ).resolves.toEqual({
+      outcome: 'conflict',
+      currentStatus: 'PROCESSING',
+    });
+    await expect(admin.retry(ids['admin.failed'])).resolves.toEqual({
+      outcome: 'applied',
+    });
+    await expect(admin.retry(ids['admin.sent'])).resolves.toEqual({
+      outcome: 'conflict',
+      currentStatus: 'SENT',
+    });
+    await expect(
+      admin.retry('00000000-0000-4000-8000-000000000099'),
+    ).resolves.toEqual({ outcome: 'not_found' });
+    await expect(
+      admin.purgeSent({ before: new Date(), limit: 10 }),
+    ).resolves.toBe(1);
+
+    const remaining = await prisma.$queryRaw<
+      Array<{
+        eventType: string;
+        status: string;
+        retryCount: number;
+        lastError: string | null;
+        processedAt: Date | null;
+        nextAttemptAt: Date | null;
+        claimToken: string | null;
+      }>
+    >`
+      SELECT
+        event_type AS "eventType",
+        status,
+        retry_count AS "retryCount",
+        last_error AS "lastError",
+        processed_at AS "processedAt",
+        next_attempt_at AS "nextAttemptAt",
+        claim_token::text AS "claimToken"
+      FROM outbox_events
+      WHERE event_type LIKE 'admin.%'
+      ORDER BY event_type
+    `;
+    expect(remaining).toEqual([
+      {
+        eventType: 'admin.failed',
+        status: 'PENDING',
+        retryCount: 2,
+        lastError: null,
+        processedAt: null,
+        nextAttemptAt: expect.any(Date),
+        claimToken: null,
+      },
+      {
+        eventType: 'admin.pending',
+        status: 'FAILED',
+        retryCount: 1,
+        lastError: 'operator stop',
+        processedAt: expect.any(Date),
+        nextAttemptAt: null,
+        claimToken: null,
+      },
+      {
+        eventType: 'admin.processing',
+        status: 'PROCESSING',
+        retryCount: 0,
+        lastError: null,
+        processedAt: null,
+        nextAttemptAt: null,
+        claimToken: expect.any(String),
+      },
+    ]);
+  });
+
+  it('does not let admin markFailed invert an active poller completion', async () => {
+    await prisma.$executeRaw`
+      INSERT INTO outbox_events (event_type, payload)
+      VALUES ('admin.active-race', '{}'::jsonb)
+    `;
+    let reportDispatchStarted!: (id: string) => void;
+    const dispatchStarted = new Promise<string>((resolve) => {
+      reportDispatchStarted = resolve;
+    });
+    let releaseDispatch!: () => void;
+    const dispatchBarrier = new Promise<void>((resolve) => {
+      releaseDispatch = resolve;
+    });
+    const publisher = {
+      publish: jest.fn(async (record: OutboxRecord) => {
+        reportDispatchStarted(record.id);
+        await dispatchBarrier;
+      }),
+    };
+    const poller = new OutboxPoller(
+      {
+        prisma,
+        polling: { enabled: false, batchSize: 1 },
+        delivery: { mode: 'publisher' },
+        lease: { duration: 1_000, heartbeatInterval: 100 },
+      },
+      publisher,
+      { getHandlers: jest.fn() } as any,
+      { addInterval: jest.fn(), deleteInterval: jest.fn() } as any,
+    );
+    const admin = new OutboxAdminService({ prisma });
+    const polling = poller.poll();
+    const id = await dispatchStarted;
+
+    await expect(admin.markFailed(id, 'operator stop')).resolves.toEqual({
+      outcome: 'conflict',
+      currentStatus: 'PROCESSING',
+    });
+    releaseDispatch();
+    await polling;
+
+    const terminal = await prisma.$queryRaw<Array<{ status: string }>>`
+      SELECT status
+      FROM outbox_events
+      WHERE id = ${id}::uuid
+    `;
+    expect(terminal).toEqual([{ status: 'SENT' }]);
+  });
+
+  it('reports lost_claim when a concurrent transition wins after CAS observation', async () => {
+    await prisma.$executeRaw`
+      INSERT INTO outbox_events (
+        event_type,
+        payload,
+        status,
+        last_error,
+        processed_at
+      ) VALUES (
+        'admin.lost-claim',
+        '{}'::jsonb,
+        'FAILED',
+        'delivery stopped',
+        NOW()
+      )
+    `;
+    const [row] = await prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT id
+      FROM outbox_events
+      WHERE event_type = 'admin.lost-claim'
+    `;
+    let reportLockHeld!: () => void;
+    const lockHeld = new Promise<void>((resolve) => {
+      reportLockHeld = resolve;
+    });
+    let releaseLock!: () => void;
+    const lockBarrier = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    const concurrentTransition = prisma.$transaction(async (tx: any) => {
+      await tx.$executeRaw`
+        UPDATE outbox_events
+        SET updated_at = NOW()
+        WHERE id = ${row.id}::uuid
+      `;
+      reportLockHeld();
+      await lockBarrier;
+      await tx.$executeRaw`
+        UPDATE outbox_events
+        SET status = 'SENT',
+            last_error = NULL,
+            processed_at = NOW(),
+            next_attempt_at = NULL,
+            updated_at = NOW()
+        WHERE id = ${row.id}::uuid
+      `;
+    });
+    await lockHeld;
+
+    const admin = new OutboxAdminService({ prisma });
+    const retrying = admin.retry(row.id);
+    const deadline = Date.now() + 2_000;
+    let casWaitingOnLock = false;
+    while (Date.now() < deadline) {
+      const [activity] = await prisma.$queryRaw<Array<{ waiting: boolean }>>`
+        SELECT EXISTS (
+          SELECT 1
+          FROM pg_stat_activity
+          WHERE datname = current_database()
+            AND wait_event_type = 'Lock'
+            AND query LIKE '%WITH target AS MATERIALIZED%'
+        ) AS waiting
+      `;
+      if (activity.waiting) {
+        casWaitingOnLock = true;
+        break;
+      }
+      await sleep(10);
+    }
+    releaseLock();
+    await concurrentTransition;
+    expect(casWaitingOnLock).toBe(true);
+    await expect(retrying).resolves.toEqual({ outcome: 'lost_claim' });
+
+    const terminal = await prisma.$queryRaw<Array<{ status: string }>>`
+      SELECT status
+      FROM outbox_events
+      WHERE id = ${row.id}::uuid
+    `;
+    expect(terminal).toEqual([{ status: 'SENT' }]);
   });
 
   describe('admin retry flow', () => {
@@ -1184,7 +1467,9 @@ describe('Outbox E2E', () => {
       expect(listed[0].id).toBe(failed[0].id);
 
       toggleListener.shouldFail = false;
-      await expect(admin.retry(failed[0].id)).resolves.toBe(true);
+      await expect(admin.retry(failed[0].id)).resolves.toEqual({
+        outcome: 'applied',
+      });
 
       await sleep(1000);
 

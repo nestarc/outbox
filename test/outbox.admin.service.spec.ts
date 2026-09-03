@@ -189,28 +189,54 @@ describe('OutboxAdminService', () => {
     );
   });
 
-  it('should retry only FAILED records and keep retry_count', async () => {
+  it('should CAS retry only FAILED records and keep retry_count', async () => {
     const { service, prisma } = createService();
-    prisma.$executeRawUnsafe.mockResolvedValue(1);
+    prisma.$queryRawUnsafe.mockResolvedValue([{ outcome: 'applied' }]);
 
-    await expect(service.retry('evt-1')).resolves.toBe(true);
+    await expect(service.retry('evt-1')).resolves.toEqual({
+      outcome: 'applied',
+    });
 
-    const [sql, ...values] = prisma.$executeRawUnsafe.mock.calls[0];
+    const [sql, ...values] = prisma.$queryRawUnsafe.mock.calls[0];
+    expect(sql).toContain('WITH target AS MATERIALIZED');
     expect(sql).toContain("status = 'PENDING'");
     expect(sql).toContain('last_error = NULL');
     expect(sql).toContain('processed_at = NULL');
     expect(sql).toContain('next_attempt_at = NOW()');
     expect(sql).toContain('WHERE id = $1::uuid');
-    expect(sql).toContain('status = $2');
+    expect(sql).toContain('current.status = $2');
+    expect(sql).toContain("'lost_claim'");
     expect(sql).not.toContain('retry_count = 0');
     expect(values).toEqual(['evt-1', 'FAILED']);
   });
 
-  it('should return false when retry updates no rows', async () => {
-    const { service, prisma } = createService();
-    prisma.$executeRawUnsafe.mockResolvedValue(0);
+  it.each(['not_found', 'conflict', 'lost_claim'] as const)(
+    'should return %s when retry does not apply',
+    async (outcome) => {
+      const { service, prisma } = createService();
+      prisma.$queryRawUnsafe.mockResolvedValue([
+        {
+          outcome,
+          current_status: outcome === 'conflict' ? 'PROCESSING' : null,
+        },
+      ]);
 
-    await expect(service.retry('evt-1')).resolves.toBe(false);
+      await expect(service.retry('evt-1')).resolves.toEqual(
+        outcome === 'conflict'
+          ? { outcome, currentStatus: 'PROCESSING' }
+          : { outcome },
+      );
+    },
+  );
+
+  it('should reject CAS mutations when prisma lacks $queryRawUnsafe', async () => {
+    const service = new OutboxAdminService({
+      prisma: { $queryRaw: jest.fn(), $executeRaw: jest.fn() },
+    });
+
+    await expect(service.retry('evt-1')).rejects.toThrow(
+      'OutboxAdminService requires prisma.$queryRawUnsafe',
+    );
   });
 
   it('should reject dynamic updates when prisma lacks $executeRawUnsafe', async () => {
@@ -218,7 +244,7 @@ describe('OutboxAdminService', () => {
       prisma: { $queryRaw: jest.fn(), $executeRaw: jest.fn() },
     });
 
-    await expect(service.retry('evt-1')).rejects.toThrow(
+    await expect(service.retryMany(['evt-1'])).rejects.toThrow(
       'OutboxAdminService requires prisma.$executeRawUnsafe',
     );
   });
@@ -244,28 +270,43 @@ describe('OutboxAdminService', () => {
     expect(prisma.$executeRawUnsafe).not.toHaveBeenCalled();
   });
 
-  it('should mark a record as failed with a reason', async () => {
+  it('should CAS mark only PENDING records as failed with terminal invariants', async () => {
     const { service, prisma } = createService();
-    prisma.$executeRawUnsafe.mockResolvedValue(1);
+    prisma.$queryRawUnsafe.mockResolvedValue([{ outcome: 'applied' }]);
 
-    await expect(service.markFailed('evt-1', 'manual stop')).resolves.toBe(
-      true,
-    );
+    await expect(service.markFailed('evt-1', 'manual stop')).resolves.toEqual({
+      outcome: 'applied',
+    });
 
-    const [sql, ...values] = prisma.$executeRawUnsafe.mock.calls[0];
+    const [sql, ...values] = prisma.$queryRawUnsafe.mock.calls[0];
+    expect(sql).toContain('WITH target AS MATERIALIZED');
     expect(sql).toContain("status = 'FAILED'");
     expect(sql).toContain('last_error = $2');
+    expect(sql).toContain('processed_at = NOW()');
+    expect(sql).toContain('next_attempt_at = NULL');
+    expect(sql).toContain("current.status = 'PENDING'");
+    expect(sql).not.toContain("current.status = 'PROCESSING'");
     expect(values).toEqual(['evt-1', 'manual stop']);
   });
 
-  it('should return false when markFailed updates no rows', async () => {
-    const { service, prisma } = createService();
-    prisma.$executeRawUnsafe.mockResolvedValue(0);
+  it.each(['not_found', 'conflict', 'lost_claim'] as const)(
+    'should return %s when markFailed does not apply',
+    async (outcome) => {
+      const { service, prisma } = createService();
+      prisma.$queryRawUnsafe.mockResolvedValue([
+        {
+          outcome,
+          current_status: outcome === 'conflict' ? 'PROCESSING' : null,
+        },
+      ]);
 
-    await expect(service.markFailed('evt-1', 'manual stop')).resolves.toBe(
-      false,
-    );
-  });
+      await expect(service.markFailed('evt-1', 'manual stop')).resolves.toEqual(
+        outcome === 'conflict'
+          ? { outcome, currentStatus: 'PROCESSING' }
+          : { outcome },
+      );
+    },
+  );
 
   it('should purge only SENT rows older than the cutoff', async () => {
     const { service, prisma } = createService();
