@@ -1,7 +1,7 @@
 import { OutboxListener } from '../src/outbox.listener';
 import type { OutboxNotificationClient } from '../src/interfaces/outbox-wakeup.interface';
 import type { OutboxOptions } from '../src/interfaces/outbox-options.interface';
-import type { OutboxPoller } from '../src/outbox.poller';
+import { OutboxPoller } from '../src/outbox.poller';
 
 function createClient(): {
   client: jest.Mocked<OutboxNotificationClient>;
@@ -22,9 +22,9 @@ function createClient(): {
   return { client, handlers };
 }
 
-function createPoller(): jest.Mocked<Pick<OutboxPoller, 'poll'>> {
+function createPoller(): jest.Mocked<Pick<OutboxPoller, 'requestPoll'>> {
   return {
-    poll: jest.fn().mockResolvedValue(undefined),
+    requestPoll: jest.fn(),
   };
 }
 
@@ -67,9 +67,79 @@ describe('OutboxListener', () => {
     const listener = new OutboxListener(options, poller);
     await listener.onModuleInit();
 
-    handlers.notification[0]({ channel: 'outbox_custom', payload: 'order.created' });
+    handlers.notification[0]({
+      channel: 'outbox_custom',
+      payload: 'order.created',
+    });
 
-    expect(poller.poll).toHaveBeenCalledTimes(1);
+    expect(poller.requestPoll).toHaveBeenCalledTimes(1);
+  });
+
+  it('coalesces a notification burst through the poll coordinator', async () => {
+    const { client, handlers } = createClient();
+    let reportFirstQueryStarted!: () => void;
+    const firstQueryStarted = new Promise<void>((resolve) => {
+      reportFirstQueryStarted = resolve;
+    });
+    let releaseFirstQuery!: () => void;
+    const firstQueryBarrier = new Promise<void>((resolve) => {
+      releaseFirstQuery = resolve;
+    });
+    let activeQueries = 0;
+    let maxActiveQueries = 0;
+    const prisma = {
+      $queryRaw: jest.fn().mockImplementation(async () => {
+        activeQueries++;
+        maxActiveQueries = Math.max(maxActiveQueries, activeQueries);
+        try {
+          if (prisma.$queryRaw.mock.calls.length === 1) {
+            reportFirstQueryStarted();
+            await firstQueryBarrier;
+          }
+          return [];
+        } finally {
+          activeQueries--;
+        }
+      }),
+      $executeRaw: jest.fn().mockResolvedValue(0),
+    };
+    const options: OutboxOptions = {
+      prisma,
+      polling: { enabled: false },
+      wakeup: {
+        enabled: true,
+        channel: 'outbox_custom',
+        clientFactory: () => client,
+      },
+    };
+    const poller = new OutboxPoller(
+      options,
+      { dispatch: jest.fn().mockResolvedValue(undefined) },
+      {
+        getHandlers: jest.fn().mockReturnValue([]),
+        getRegisteredEventTypes: jest.fn().mockReturnValue([]),
+      } as any,
+      {
+        addInterval: jest.fn(),
+        deleteInterval: jest.fn(),
+      } as any,
+    );
+    const listener = new OutboxListener(options, poller);
+    await listener.onModuleInit();
+
+    handlers.notification[0]({ channel: 'outbox_custom' });
+    await firstQueryStarted;
+    for (let i = 0; i < 100; i++) {
+      handlers.notification[0]({ channel: 'outbox_custom' });
+    }
+    const completion = poller.poll();
+
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+    releaseFirstQuery();
+    await completion;
+
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(2);
+    expect(maxActiveQueries).toBe(1);
   });
 
   it('should escape notification channel identifiers', async () => {
@@ -92,10 +162,9 @@ describe('OutboxListener', () => {
     expect(client.query).toHaveBeenCalledWith('LISTEN "outbox""custom"');
   });
 
-  it('should isolate poll failures triggered by notifications', async () => {
+  it('should delegate notification failure isolation to the poller', async () => {
     const { client, handlers } = createClient();
     const poller = createPoller();
-    poller.poll.mockRejectedValue(new Error('poll failed'));
     const listener = new OutboxListener(
       {
         prisma: {},
@@ -110,9 +179,8 @@ describe('OutboxListener', () => {
 
     await listener.onModuleInit();
     handlers.notification[0]({ channel: 'outbox_custom' });
-    await Promise.resolve();
 
-    expect(poller.poll).toHaveBeenCalledTimes(1);
+    expect(poller.requestPoll).toHaveBeenCalledTimes(1);
   });
 
   it('should ignore notifications from other channels', async () => {
@@ -133,7 +201,7 @@ describe('OutboxListener', () => {
 
     handlers.notification[0]({ channel: 'other_channel', payload: 'event' });
 
-    expect(poller.poll).not.toHaveBeenCalled();
+    expect(poller.requestPoll).not.toHaveBeenCalled();
   });
 
   it('should not connect when wakeup is disabled', async () => {

@@ -172,7 +172,7 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 |    1 | `OUT-M04A`     | P0       | `READY`    | S    | 없음                                                                                 | at-least-once 전달 계약 긴급 정정                                   |
 |    2 | `OUT-M01`      | P0       | `DONE`     | L    | 없음                                                                                 | 불변 claim identity와 fenced 상태 전이                              |
 |    3 | `OUT-M02`      | P0       | `BLOCKED`  | L    | `OUT-M01`, `OUT-M03`                                                                 | lease/heartbeat/recovery와 미시작 claim 반납                        |
-|    4 | `OUT-M03`      | P0       | `READY`    | M    | 없음                                                                                 | poll single-flight, coalescing, background 오류 격리                |
+|    4 | `OUT-M03`      | P0       | `DONE`     | M    | 없음                                                                                 | poll single-flight, coalescing, background 오류 격리                |
 |    5 | `OUT-M04B`     | P0       | `BLOCKED`  | L    | `OUT-M01–03`                                                                         | 실제 PostgreSQL 다중 poller/crash-window gate                       |
 |    6 | `OUT-M05`      | P1       | `READY`    | M    | `OUT-M01`                                                                            | `next_attempt_at` 기반 영속 retry 시각                              |
 |    7 | `OUT-M06`      | P1       | `DECISION` | M    | 없음                                                                                 | tenant producer provenance 정책                                     |
@@ -298,17 +298,17 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 
 ### `OUT-M03` — poll single-flight와 background 오류 격리
 
-- 상태: `P0 / READY`
+- 상태: `P0 / DONE`
 - 문제: interval callback이 `poll()` Promise를 버려 DB rejection이 unhandled가 되고, timer와 LISTEN notification이 겹치면 동일 프로세스 poll이 제한 없이 중첩될 수 있다.
 
 완료 조건:
 
-- [ ] interval, notification, manual wakeup은 하나의 coordinator를 통한다.
-- [ ] 실행 중에는 poll 하나만 있고 추가 trigger는 최대 한 번의 queued rerun으로 coalesce한다.
-- [ ] 모든 background rejection을 catch해 logger/observer로 전달하되 scheduler가 종료되지 않는다.
-- [ ] transient DB failure 뒤 다음 trigger에서 정상 복구한다.
-- [ ] notification storm의 max concurrent poll이 1이고 memory가 trigger 수에 비례해 증가하지 않는다.
-- [ ] shutdown이 queued rerun을 시작하지 않고 in-flight poll만 정해진 계약으로 기다린다.
+- [x] interval, notification, manual wakeup은 하나의 coordinator를 통한다.
+- [x] 실행 중에는 poll 하나만 있고 추가 trigger는 최대 한 번의 queued rerun으로 coalesce한다.
+- [x] 모든 background rejection을 catch해 logger/observer로 전달하되 scheduler가 종료되지 않는다.
+- [x] transient DB failure 뒤 다음 trigger에서 정상 복구한다.
+- [x] notification storm의 max concurrent poll이 1이고 memory가 trigger 수에 비례해 증가하지 않는다.
+- [x] shutdown이 queued rerun을 시작하지 않고 in-flight poll만 정해진 계약으로 기다린다.
 
 검증: 프로필 A/C. 비범위: 처리 callback의 병렬도 확대.
 
@@ -735,10 +735,11 @@ Outbox ── durable record / publisher callback ──> Jobs adapter ──> J
 
 ## 9. 작업 기록
 
-| 날짜       | Task        | 상태   | ref/PR                     | 검증 결과                                                        | 다음 정확한 행동                            |
-| ---------- | ----------- | ------ | -------------------------- | ---------------------------------------------------------------- | ------------------------------------------- |
-| 2026-09-02 | 계획 기준선 | `DONE` | `origin/main@873f95b` 조사 | unit 88, lint/typecheck/coverage/audit 기록; fresh DB E2E 미실행 | `OUT-PLAN-01`로 이 문서만 먼저 review/merge |
-| 2026-09-03 | `OUT-M01`   | `DONE` | `codex/out-m01-fenced-claims` working tree | unit 95, lint/typecheck/build PASS; PostgreSQL E2E 13 PASS; packed Prisma 7 consumer PASS | 변경 review 후 branch를 commit/push하고 `OUT-M04A` 또는 `OUT-M03` 진행 |
+| 날짜       | Task        | 상태   | ref/PR                                        | 검증 결과                                                                                 | 다음 정확한 행동                                                           |
+| ---------- | ----------- | ------ | --------------------------------------------- | ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| 2026-09-02 | 계획 기준선 | `DONE` | `origin/main@873f95b` 조사                    | unit 88, lint/typecheck/coverage/audit 기록; fresh DB E2E 미실행                          | `OUT-PLAN-01`로 이 문서만 먼저 review/merge                                |
+| 2026-09-03 | `OUT-M01`   | `DONE` | `codex/out-m01-fenced-claims` working tree    | unit 95, lint/typecheck/build PASS; PostgreSQL E2E 13 PASS; packed Prisma 7 consumer PASS | 변경 review 후 branch를 commit/push하고 `OUT-M04A` 또는 `OUT-M03` 진행     |
+| 2026-09-03 | `OUT-M03`   | `DONE` | `codex/out-m03-poll-coordinator` working tree | unit 100, lint/typecheck/clean build PASS; timer/notification burst/shutdown race PASS    | 변경 review 후 branch를 commit/push/merge하고 최신 main에서 `OUT-M02` 진행 |
 
 ### `OUT-M01` 종료 인계
 
@@ -753,4 +754,19 @@ Unverified paths and reason: 없음. OUT-M01 범위의 profile A/B/C를 실행�
 External PR, run, release evidence: 없음. branch-local working tree이며 commit/push/PR/release는 수행하지 않았다.
 Remaining risk: exactly-once와 lease/heartbeat/stuck recovery는 보장하지 않는다. OUT-M02와 OUT-M04B 범위다.
 Next exact action: diff를 review한 뒤 OUT-M01 파일만 commit/push/PR하고, 독립 P0인 OUT-M04A 또는 OUT-M03을 origin/main 기준 새 branch에서 진행한다.
+```
+
+### `OUT-M03` 종료 인계
+
+```text
+Task: OUT-M03
+State: DONE
+Start ref / end ref: local main@012e8d6349fd2a099e1169529a2006b94c99c00c / codex/out-m03-poll-coordinator working tree (uncommitted)
+Changed files: poll single-flight coordinator와 timer 오류 격리, timer/notification burst/transient failure/shutdown contract tests, CHANGELOG, maintenance plan
+Contract / semver decision: public option/type 변화 없이 poll scheduling 내부 동작만 안전하게 제한한다. concurrent trigger는 active poll 하나와 queued rerun 하나로 coalesce하며 manual poll은 poll 오류를 계속 reject한다. patch-compatible fix다.
+Commands and exact results: 첫 RED poller test 4 FAIL/26 PASS; npm ci 649 packages; focused poller/listener 2 suites/43 tests PASS; full unit 9 suites/100 tests PASS; lint PASS; build typecheck PASS; clean build PASS; git diff --check PASS
+Unverified paths and reason: 없음. OUT-M03 범위의 profile A/C를 실행했으며 PostgreSQL schema/state machine 변경은 없다.
+External PR, run, release evidence: 없음. branch-local working tree이며 commit/push/PR/release는 수행하지 않았다.
+Remaining risk: lease/heartbeat/stuck recovery는 OUT-M02, LISTEN/NOTIFY 연결 실패와 reconnect lifecycle은 OUT-M09 범위다.
+Next exact action: diff를 review한 뒤 OUT-M03 파일만 commit/push/merge하고, M01/M03가 병합된 최신 main에서 OUT-M02를 시작한다.
 ```
