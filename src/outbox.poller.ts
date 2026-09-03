@@ -11,11 +11,13 @@ import {
   DEFAULT_BATCH_SIZE,
   DEFAULT_HEARTBEAT_FAILURE_TOLERANCE,
   DEFAULT_INITIAL_DELAY,
+  DEFAULT_MAX_RETRY_DELAY,
   DEFAULT_POLLING_INTERVAL,
   DEFAULT_SHUTDOWN_TIMEOUT,
   DEFAULT_STUCK_THRESHOLD,
   OUTBOX_OPTIONS,
   OUTBOX_TRANSPORT,
+  MAX_SAFE_RETRY_DELAY,
   STUCK_RECOVERY_INTERVAL,
 } from './outbox.constants';
 import type { OutboxHandlerContext } from './interfaces/outbox-handler-context.interface';
@@ -74,6 +76,7 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
   private readonly batchSize: number;
   private readonly backoff: 'fixed' | 'exponential';
   private readonly initialDelay: number;
+  private readonly maxDelay: number;
   private readonly leaseDuration: number;
   private readonly heartbeatInterval: number;
   private readonly heartbeatFailureTolerance: number;
@@ -91,6 +94,7 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
     this.batchSize = options.polling?.batchSize ?? DEFAULT_BATCH_SIZE;
     this.backoff = options.retry?.backoff ?? DEFAULT_BACKOFF;
     this.initialDelay = options.retry?.initialDelay ?? DEFAULT_INITIAL_DELAY;
+    this.maxDelay = options.retry?.maxDelay ?? DEFAULT_MAX_RETRY_DELAY;
     this.leaseDuration =
       options.lease?.duration ??
       options.stuckThreshold ??
@@ -102,6 +106,7 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
       options.lease?.heartbeatFailureTolerance ??
       DEFAULT_HEARTBEAT_FAILURE_TOLERANCE;
     this.deliveryMode = options.delivery?.mode ?? 'local';
+    this.validateRetryOptions();
     this.validateLeaseOptions();
   }
 
@@ -368,8 +373,6 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
 
   private async fetchAndLock(): Promise<ClaimedOutboxRecord[]> {
     const prisma = this.options.prisma;
-    const backoffType = this.backoff;
-    const initialDelaySeconds = this.initialDelay / 1000;
     const leaseDurationSeconds = this.leaseDuration / 1000;
 
     return prisma.$queryRaw`
@@ -382,14 +385,8 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
         SELECT id FROM outbox_events
         WHERE status = 'PENDING'
           AND (
-            retry_count = 0
-            OR updated_at < NOW() - make_interval(
-              secs => CASE
-                WHEN ${backoffType} = 'exponential'
-                THEN ${initialDelaySeconds} * pow(2, retry_count - 1)
-                ELSE ${initialDelaySeconds}
-              END
-            )
+            (retry_count = 0 AND next_attempt_at IS NULL)
+            OR next_attempt_at <= NOW()
           )
         ORDER BY created_at ASC
         LIMIT 1
@@ -403,6 +400,7 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
         created_at AS "createdAt",
         updated_at AS "updatedAt",
         processed_at AS "processedAt",
+        next_attempt_at AS "nextAttemptAt",
         retry_count AS "retryCount",
         max_retries AS "maxRetries",
         last_error AS "lastError",
@@ -428,6 +426,7 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
           claim_token = NULL,
           lease_expires_at = NULL,
           processed_at = NOW(),
+          next_attempt_at = NULL,
           updated_at = NOW()
       WHERE id = ${record.id}::uuid
         AND status = 'PROCESSING'
@@ -453,6 +452,7 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
           claim_token = NULL,
           lease_expires_at = NULL,
           last_error = ${errorMessage},
+          next_attempt_at = NULL,
           updated_at = NOW()
       WHERE id = ${record.id}::uuid
         AND status = 'PROCESSING'
@@ -478,6 +478,7 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
             lease_expires_at = NULL,
             retry_count = ${newRetryCount},
             last_error = ${errorMessage},
+            next_attempt_at = NULL,
             updated_at = NOW()
         WHERE id = ${record.id}::uuid
           AND status = 'PROCESSING'
@@ -495,6 +496,8 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
       );
       return 'dead-letter';
     } else {
+      const retryDelaySeconds =
+        this.calculateRetryDelayMs(newRetryCount) / 1000;
       const updated = await prisma.$executeRaw`
         UPDATE outbox_events
         SET status = 'PENDING',
@@ -502,6 +505,7 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
             lease_expires_at = NULL,
             retry_count = ${newRetryCount},
             last_error = ${errorMessage},
+            next_attempt_at = NOW() + make_interval(secs => ${retryDelaySeconds}),
             updated_at = NOW()
         WHERE id = ${record.id}::uuid
           AND status = 'PROCESSING'
@@ -653,6 +657,55 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
     }
   }
 
+  private validateRetryOptions(): void {
+    if (
+      !Number.isSafeInteger(this.initialDelay) ||
+      this.initialDelay < 0 ||
+      this.initialDelay > MAX_SAFE_RETRY_DELAY
+    ) {
+      throw new Error(
+        `Outbox retry.initialDelay must be a non-negative safe integer no greater than ${MAX_SAFE_RETRY_DELAY}`,
+      );
+    }
+    if (
+      !Number.isSafeInteger(this.maxDelay) ||
+      this.maxDelay <= 0 ||
+      this.maxDelay > MAX_SAFE_RETRY_DELAY
+    ) {
+      throw new Error(
+        `Outbox retry.maxDelay must be a positive safe integer no greater than ${MAX_SAFE_RETRY_DELAY}`,
+      );
+    }
+    if (this.initialDelay > this.maxDelay) {
+      throw new Error(
+        'Outbox retry.initialDelay must be less than or equal to retry.maxDelay',
+      );
+    }
+  }
+
+  private calculateRetryDelayMs(retryCount: number): number {
+    if (!Number.isSafeInteger(retryCount) || retryCount < 1) {
+      throw new Error(
+        'Outbox persisted retry_count must be a positive safe integer when scheduling a retry',
+      );
+    }
+    if (this.backoff === 'fixed' || this.initialDelay === 0) {
+      return this.initialDelay;
+    }
+
+    const exponent = retryCount - 1;
+    const maximumUncappedExponent = Math.floor(
+      Math.log2(this.maxDelay / this.initialDelay),
+    );
+    if (exponent > maximumUncappedExponent) return this.maxDelay;
+
+    const delay = this.initialDelay * 2 ** exponent;
+    if (!Number.isSafeInteger(delay) || delay > this.maxDelay) {
+      throw new Error('Outbox retry delay calculation exceeded its safe bound');
+    }
+    return delay;
+  }
+
   private createHandlerContext(record: OutboxRecord): OutboxHandlerContext {
     return {
       record,
@@ -707,6 +760,7 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
       processedAt: record.processedAt,
+      nextAttemptAt: record.nextAttemptAt,
       retryCount: record.retryCount,
       maxRetries: record.maxRetries,
       lastError: record.lastError,

@@ -106,6 +106,18 @@ const LEASE_UPGRADE_STATEMENTS = LEASE_UPGRADE_SQL_FILE.replace(
   .map((s) => s.trim())
   .filter((s) => s.length > 0);
 
+const NEXT_ATTEMPT_UPGRADE_SQL_FILE = fs.readFileSync(
+  path.join(__dirname, '../../src/sql/upgrade-add-next-attempt-at.sql'),
+  'utf-8',
+);
+const NEXT_ATTEMPT_UPGRADE_STATEMENTS = NEXT_ATTEMPT_UPGRADE_SQL_FILE.replace(
+  /^\s*--.*$/gm,
+  '',
+)
+  .split(';')
+  .map((s) => s.trim())
+  .filter((s) => s.length > 0);
+
 async function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -241,6 +253,54 @@ describe('Outbox E2E', () => {
 
     expect(columns).toEqual([{ dataType: 'timestamp with time zone' }]);
     expect(indexes).toHaveLength(1);
+  });
+
+  it('upgrades retry due time and its pending index idempotently', async () => {
+    await prisma.$executeRawUnsafe(
+      'ALTER TABLE outbox_events DROP COLUMN next_attempt_at',
+    );
+    await prisma.$executeRaw`
+      INSERT INTO outbox_events (
+        event_type,
+        payload,
+        status,
+        retry_count
+      ) VALUES (
+        'retry.legacy-pending',
+        '{}'::jsonb,
+        'PENDING',
+        1
+      )
+    `;
+
+    for (const statement of NEXT_ATTEMPT_UPGRADE_STATEMENTS) {
+      await prisma.$executeRawUnsafe(statement);
+      await prisma.$executeRawUnsafe(statement);
+    }
+
+    const [column] = await prisma.$queryRaw<
+      Array<{ dataType: string; nextAttemptAt: Date }>
+    >`
+      SELECT
+        c.data_type::text AS "dataType",
+        e.next_attempt_at AS "nextAttemptAt"
+      FROM information_schema.columns c
+      JOIN outbox_events e ON e.event_type = 'retry.legacy-pending'
+      WHERE c.table_schema = current_schema()
+        AND c.table_name = 'outbox_events'
+        AND c.column_name = 'next_attempt_at'
+    `;
+    const [index] = await prisma.$queryRaw<Array<{ indexDefinition: string }>>`
+      SELECT indexdef::text AS "indexDefinition"
+      FROM pg_indexes
+      WHERE schemaname = current_schema()
+        AND tablename = 'outbox_events'
+        AND indexname = 'idx_outbox_pending'
+    `;
+
+    expect(column.dataType).toBe('timestamp with time zone');
+    expect(column.nextAttemptAt).toEqual(expect.any(Date));
+    expect(index.indexDefinition).toContain('next_attempt_at');
   });
 
   it('keeps a blocking publisher exclusively leased across two pollers', async () => {
@@ -648,12 +708,17 @@ describe('Outbox E2E', () => {
           payload,
           retry_count,
           max_retries,
+          next_attempt_at,
           updated_at
         ) VALUES (
           'claim.fence',
           '{}'::jsonb,
           ${retryCount},
           ${maxRetries},
+          CASE
+            WHEN ${retryCount} = 0 THEN NULL
+            ELSE NOW() - INTERVAL '1 minute'
+          END,
           NOW() - INTERVAL '1 minute'
         )
       `;
@@ -926,6 +991,146 @@ describe('Outbox E2E', () => {
       expect(records).toHaveLength(1);
       expect(records[0].status).toBe('SENT');
     });
+  });
+
+  it('keeps a persisted retry due time across pollers with different backoff settings', async () => {
+    await prisma.$executeRaw`
+      INSERT INTO outbox_events (event_type, payload, max_retries)
+      VALUES ('retry.persisted-due', '{}'::jsonb, 5)
+    `;
+    const firstPublisher = {
+      publish: jest.fn().mockRejectedValue(new Error('broker unavailable')),
+    };
+    const secondPublisher = {
+      publish: jest.fn().mockResolvedValue(undefined),
+    };
+    const createPoller = (
+      publisher: { publish: jest.Mock },
+      retry: {
+        backoff: 'fixed' | 'exponential';
+        initialDelay: number;
+      },
+    ) =>
+      new OutboxPoller(
+        {
+          prisma,
+          polling: { enabled: false, batchSize: 1 },
+          delivery: { mode: 'publisher' },
+          retry: { maxRetries: 5, ...retry },
+        },
+        publisher,
+        { getHandlers: jest.fn() } as any,
+        { addInterval: jest.fn(), deleteInterval: jest.fn() } as any,
+      );
+    const schedulingPoller = createPoller(firstPublisher, {
+      backoff: 'exponential',
+      initialDelay: 60_000,
+    });
+    const differentlyConfiguredPoller = createPoller(secondPublisher, {
+      backoff: 'fixed',
+      initialDelay: 0,
+    });
+
+    await schedulingPoller.poll();
+
+    const [scheduled] = await prisma.$queryRaw<
+      Array<{
+        databaseNow: Date;
+        nextAttemptAt: Date;
+        retryCount: number;
+      }>
+    >`
+      SELECT
+        NOW() AS "databaseNow",
+        next_attempt_at AS "nextAttemptAt",
+        retry_count AS "retryCount"
+      FROM outbox_events
+      WHERE event_type = 'retry.persisted-due'
+    `;
+    expect(scheduled.retryCount).toBe(1);
+    expect(scheduled.nextAttemptAt.getTime()).toBeGreaterThan(
+      scheduled.databaseNow.getTime(),
+    );
+
+    await differentlyConfiguredPoller.poll();
+    expect(secondPublisher.publish).not.toHaveBeenCalled();
+
+    await prisma.$executeRaw`
+      UPDATE outbox_events
+      SET next_attempt_at = NOW()
+      WHERE event_type = 'retry.persisted-due'
+    `;
+    await differentlyConfiguredPoller.poll();
+
+    expect(secondPublisher.publish).toHaveBeenCalledTimes(1);
+    const [terminal] = await prisma.$queryRaw<
+      Array<{ status: string; nextAttemptAt: Date | null }>
+    >`
+      SELECT status, next_attempt_at AS "nextAttemptAt"
+      FROM outbox_events
+      WHERE event_type = 'retry.persisted-due'
+    `;
+    expect(terminal).toEqual({ status: 'SENT', nextAttemptAt: null });
+  });
+
+  it('makes a manual retry due now without resetting its retry count', async () => {
+    await prisma.$executeRaw`
+      INSERT INTO outbox_events (
+        event_type,
+        payload,
+        status,
+        retry_count,
+        last_error,
+        processed_at
+      ) VALUES (
+        'retry.manual-due-now',
+        '{}'::jsonb,
+        'FAILED',
+        2,
+        'operator retry requested',
+        NOW() - INTERVAL '1 hour'
+      )
+    `;
+    const [failed] = await prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT id
+      FROM outbox_events
+      WHERE event_type = 'retry.manual-due-now'
+    `;
+    const admin = new OutboxAdminService({ prisma });
+
+    await expect(admin.retry(failed.id)).resolves.toBe(true);
+
+    const [retried] = await prisma.$queryRaw<
+      Array<{
+        status: string;
+        retryCount: number;
+        lastError: string | null;
+        processedAt: Date | null;
+        nextAttemptAt: Date;
+        databaseNow: Date;
+      }>
+    >`
+      SELECT
+        status,
+        retry_count AS "retryCount",
+        last_error AS "lastError",
+        processed_at AS "processedAt",
+        next_attempt_at AS "nextAttemptAt",
+        NOW() AS "databaseNow"
+      FROM outbox_events
+      WHERE id = ${failed.id}::uuid
+    `;
+    expect(retried).toEqual({
+      status: 'PENDING',
+      retryCount: 2,
+      lastError: null,
+      processedAt: null,
+      nextAttemptAt: expect.any(Date),
+      databaseNow: expect.any(Date),
+    });
+    expect(retried.nextAttemptAt.getTime()).toBeLessThanOrEqual(
+      retried.databaseNow.getTime(),
+    );
   });
 
   describe('admin retry flow', () => {

@@ -174,7 +174,7 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 |    3 | `OUT-M02`      | P0       | `DONE`     | L    | `OUT-M01`, `OUT-M03`                                                                 | lease/heartbeat/recovery와 미시작 claim 반납                        |
 |    4 | `OUT-M03`      | P0       | `DONE`     | M    | 없음                                                                                 | poll single-flight, coalescing, background 오류 격리                |
 |    5 | `OUT-M04B`     | P0       | `DONE`     | L    | `OUT-M01–03`                                                                         | 실제 PostgreSQL 다중 poller/crash-window gate                       |
-|    6 | `OUT-M05`      | P1       | `READY`    | M    | `OUT-M01`                                                                            | `next_attempt_at` 기반 영속 retry 시각                              |
+|    6 | `OUT-M05`      | P1       | `DONE`     | M    | `OUT-M01`                                                                            | `next_attempt_at` 기반 영속 retry 시각                              |
 |    7 | `OUT-M06`      | P1       | `DECISION` | M    | 없음                                                                                 | tenant producer provenance 정책                                     |
 |    8 | `OUT-M07`      | P1       | `BLOCKED`  | M    | `OUT-M06`, `OUT-M08`                                                                 | privileged/tenant-safe admin 경계                                   |
 |    9 | `OUT-M08`      | P1       | `BLOCKED`  | M    | `OUT-M01–02`, `OUT-M05`                                                              | admin 상태 전이 CAS                                                 |
@@ -347,18 +347,18 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 
 ### `OUT-M05` — retry due time 영속화
 
-- 상태: `P1 / BLOCKED`; 선행 `OUT-M01`
+- 상태: `P1 / DONE`; 선행 `OUT-M01`
 - 문제: 각 process의 현재 backoff/initialDelay로 row eligibility를 다시 계산해 rolling config가 기존 실패의 재시도 시각을 바꾼다.
 
 완료 조건:
 
-- [ ] 실패 전이에서 `next_attempt_at`을 한 번 계산해 row에 저장한다.
-- [ ] `next_attempt_at` column/index와 이 버전에서 필요한 fresh/upgrade SQL은 이 작업이 소유한다. `OUT-M19`는 통합 과거-version 경로를 검증한다.
-- [ ] initial `NULL`은 즉시 eligible인 미실패 row만 뜻하고, 실패 due time은 DB clock을 기준으로 기록한다.
-- [ ] claim query와 index가 stored due time을 사용한다.
-- [ ] manual retry는 명시적으로 due now를 만들고 retry count/processedAt 불변식을 문서화한다.
-- [ ] exponential overflow와 max delay 상한을 fail-closed 처리한다.
-- [ ] 서로 다른 config의 poller가 같은 row due time에 합의한다.
+- [x] 실패 전이에서 `next_attempt_at`을 한 번 계산해 row에 저장한다.
+- [x] `next_attempt_at` column/index와 이 버전에서 필요한 fresh/upgrade SQL은 이 작업이 소유한다. `OUT-M19`는 통합 과거-version 경로를 검증한다.
+- [x] initial `NULL`은 즉시 eligible인 미실패 row만 뜻하고, 실패 due time은 DB clock을 기준으로 기록한다.
+- [x] claim query와 index가 stored due time을 사용한다.
+- [x] manual retry는 명시적으로 due now를 만들고 retry count/processedAt 불변식을 문서화한다.
+- [x] exponential overflow와 max delay 상한을 fail-closed 처리한다.
+- [x] 서로 다른 config의 poller가 같은 row due time에 합의한다.
 
 검증: 프로필 A/B/C. `OUT-M19`는 이 작업의 schema를 포함한 v0.1/v0.2 통합 upgrade 경로를 검증한다.
 
@@ -735,14 +735,15 @@ Outbox ── durable record / publisher callback ──> Jobs adapter ──> J
 
 ## 9. 작업 기록
 
-| 날짜       | Task        | 상태   | ref/PR                                     | 검증 결과                                                                                       | 다음 정확한 행동                                                       |
-| ---------- | ----------- | ------ | ------------------------------------------ | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| 2026-09-02 | 계획 기준선 | `DONE` | `origin/main@873f95b` 조사                 | unit 88, lint/typecheck/coverage/audit 기록; fresh DB E2E 미실행                                | `OUT-PLAN-01`로 이 문서만 먼저 review/merge                            |
-| 2026-09-03 | `OUT-M01`   | `DONE` | `codex/out-m01-fenced-claims` working tree | unit 95, lint/typecheck/build PASS; PostgreSQL E2E 13 PASS; packed Prisma 7 consumer PASS       | 변경 review 후 branch를 commit/push하고 `OUT-M04A` 또는 `OUT-M03` 진행 |
-| 2026-09-03 | `OUT-M03`   | `DONE` | `901865c`                                  | unit 100, lint/typecheck/clean build PASS; timer/notification burst/shutdown race PASS          | local main merge `ad96d8e`에서 `OUT-M02` 진행                          |
-| 2026-09-03 | `OUT-M02`   | `DONE` | `a14d119`                                  | unit 110, PostgreSQL E2E 16, packed Prisma 7 consumer, coverage/lint/typecheck/build PASS       | local main merge `95b4849` 완료; `OUT-M04A` 진행                       |
-| 2026-09-03 | `OUT-M04A`  | `DONE` | local main `9418db9` working tree          | README delivery contract/spec authority/CHANGELOG 대조; scoped format/lint/typecheck/build PASS | `OUT-M04B` PostgreSQL gate와 함께 완료                                 |
-| 2026-09-03 | `OUT-M04B`  | `DONE` | local main `9418db9` working tree          | unit 110; PostgreSQL E2E 19; packed Prisma 7 consumer; coverage/audit/lint/build PASS           | 변경 review 후 commit/push/PR                                          |
+| 날짜       | Task        | 상태   | ref/PR                                           | 검증 결과                                                                                       | 다음 정확한 행동                                                       |
+| ---------- | ----------- | ------ | ------------------------------------------------ | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| 2026-09-02 | 계획 기준선 | `DONE` | `origin/main@873f95b` 조사                       | unit 88, lint/typecheck/coverage/audit 기록; fresh DB E2E 미실행                                | `OUT-PLAN-01`로 이 문서만 먼저 review/merge                            |
+| 2026-09-03 | `OUT-M01`   | `DONE` | `codex/out-m01-fenced-claims` working tree       | unit 95, lint/typecheck/build PASS; PostgreSQL E2E 13 PASS; packed Prisma 7 consumer PASS       | 변경 review 후 branch를 commit/push하고 `OUT-M04A` 또는 `OUT-M03` 진행 |
+| 2026-09-03 | `OUT-M03`   | `DONE` | `901865c`                                        | unit 100, lint/typecheck/clean build PASS; timer/notification burst/shutdown race PASS          | local main merge `ad96d8e`에서 `OUT-M02` 진행                          |
+| 2026-09-03 | `OUT-M02`   | `DONE` | `a14d119`                                        | unit 110, PostgreSQL E2E 16, packed Prisma 7 consumer, coverage/lint/typecheck/build PASS       | local main merge `95b4849` 완료; `OUT-M04A` 진행                       |
+| 2026-09-03 | `OUT-M04A`  | `DONE` | local main `9418db9` working tree                | README delivery contract/spec authority/CHANGELOG 대조; scoped format/lint/typecheck/build PASS | `OUT-M04B` PostgreSQL gate와 함께 완료                                 |
+| 2026-09-03 | `OUT-M04B`  | `DONE` | local main `9418db9` working tree                | unit 110; PostgreSQL E2E 19; packed Prisma 7 consumer; coverage/audit/lint/build PASS           | 변경 review 후 commit/push/PR                                          |
+| 2026-09-03 | `OUT-M05`   | `DONE` | `codex/out-m05-persisted-retry-due` working tree | unit 115; PostgreSQL E2E 22; packed Prisma 7 consumer; lint/typecheck/build PASS                | 변경 review 후 commit/push/PR하고 `OUT-M06` 정책 결정                  |
 
 ### `OUT-M01` 종료 인계
 
@@ -817,4 +818,19 @@ Unverified paths and reason: 실제 원격 GitHub Actions run은 push 전이므�
 External PR, run, release evidence: 없음. local disposable compose project outbox-out-m04-20260903에서 검증했고 작업 종료 시 제거했다.
 Remaining risk: process-loss test는 process kill 대신 publisher accept 직후 남는 실제 DB snapshot(PROCESSING + expired lease)을 결정적으로 구성한다. 실제 cross-package broker/worker crash/restart는 TEN-ECO-NEXT 범위다.
 Next exact action: 변경 review 후 OUT-M04A/B 파일만 commit/push/PR하고, 다음 최저 미완료 P1인 OUT-M05를 진행한다.
+```
+
+### `OUT-M05` 종료 인계
+
+```text
+Task: OUT-M05
+State: DONE
+Start ref / end ref: local main@a34ef20 / codex/out-m05-persisted-retry-due working tree (uncommitted)
+Changed files: poller persisted due-time claim/failure transitions와 retry validation, admin manual retry invariants, OutboxRecord/option types, fresh/0.1/0.2 upgrade SQL과 pending index, unit/PostgreSQL/packed-consumer contract tests, README/CHANGELOG, maintenance plan
+Contract / semver decision: failure transition은 PostgreSQL NOW()에서 next_attempt_at을 한 번 저장하고 모든 poller가 stored due만 사용한다. NULL due는 retry_count=0인 미실패 PENDING row만 즉시 eligible하다. retry.maxDelay 기본 24시간과 2,147,483,647ms hard bound를 두고 exponential delay는 exponentiation 전에 cap에 포화하며 invalid timing은 module construction에서 거부한다. manual retry는 retry_count를 유지하고 last_error/processed_at을 비운 뒤 next_attempt_at=NOW()로 즉시 due를 만든다. additive required schema, public option, OutboxRecord.nextAttemptAt 추가이므로 앞선 작업과 같은 next pre-1.0 minor 대상으로 결정했다.
+Commands and exact results: 첫 RED focused poller 1 FAIL/40 skipped; clean unit 9 suites/115 tests PASS; PostgreSQL 16 E2E 1 suite/22 tests PASS. packed consumer 뒤 첫 E2E 재실행은 suite beforeAll의 Prisma request error로 전부 실패했으나 container는 healthy/error-log 없음이었고 변경 없는 즉시 재실행 22 PASS로 비재현; strict packed Nest 11.2.1/Prisma 7.10.0 install/typecheck/build/PostgreSQL smoke PASS (sha512-R2MNKBjujQaTQ0sl2Qq7mCNYFCqW71UWKEDgGDg2Nkos8CJlzmtso/bxqI29Yz2uOdE/tLoah1yoqhoWXPV5mw==); lint, build typecheck, clean build, scoped Prettier, git diff --check PASS
+Unverified paths and reason: OUT-M19가 소유한 historical v0.1/v0.2 통합 upgrade matrix와 원격 GitHub Actions는 이 working tree에서 실행하지 않았다. 이 작업의 idempotent current-schema upgrade와 legacy pending retry backfill은 실제 PostgreSQL에서 검증했다.
+External PR, run, release evidence: 없음. commit/push/PR/release는 수행하지 않았다.
+Remaining risk: 0.2.x poller는 next_attempt_at을 쓰지 않으므로 migration 전에 drain해야 한다. migration 시 기존 PENDING/PROCESSING retry는 보수적으로 즉시 due가 된다. 대량 pending query/index 성능 기준은 OUT-M18 범위다.
+Next exact action: diff를 review한 뒤 OUT-M05 파일만 commit/push/PR하고, 다음 최저 미완료 P1인 OUT-M06 tenant producer provenance 정책을 결정한다.
 ```

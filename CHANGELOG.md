@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Retry failures now persist a PostgreSQL-clock `next_attempt_at`; every
+  poller claims from that stored due time instead of recalculating eligibility
+  from its local backoff configuration. `retry.maxDelay` bounds exponential
+  delay safely, and `OutboxRecord.nextAttemptAt` exposes the schedule.
+- Admin retry keeps `retry_count`, clears `last_error` and `processed_at`, and
+  writes `next_attempt_at = NOW()` so the row is explicitly due immediately.
 - The README now defines polling, local-handler, and publisher delivery as
   at-least-once, documents every known duplicate window, and clarifies that
   `idempotency_key`, `partition_key`, and Outbox `SENT` do not provide consumer
@@ -46,12 +52,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Migration
 
 - Existing 0.2.x databases must apply
-  `src/sql/upgrade-add-claim-token.sql` and `src/sql/upgrade-add-lease.sql`
-  before deploying this runtime. The additive nullable columns and partial
-  indexes are safe to apply more than once. Legacy `PROCESSING` rows with a
-  null lease retain the configured duration as their recovery threshold. Drain
-  0.2.x pollers before starting the lease-aware runtime because older pollers
-  do not heartbeat their active claims.
+  `src/sql/upgrade-add-claim-token.sql`, `src/sql/upgrade-add-lease.sql`, and
+  `src/sql/upgrade-add-next-attempt-at.sql` before deploying this runtime. The
+  additive nullable columns and partial indexes are safe to apply more than
+  once. The retry upgrade makes existing pending/processing retries due at
+  migration time and rebuilds the pending index around `next_attempt_at`.
+  Legacy `PROCESSING` rows with a null lease retain the configured duration as
+  their recovery threshold. Drain 0.2.x pollers before starting the new runtime
+  because older pollers neither heartbeat active claims nor persist due times.
 - Because the required schema migration and readonly public type tightening
   affect consumers, this change is targeted at the next pre-1.0 minor release
   rather than a patch release.

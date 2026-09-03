@@ -15,6 +15,8 @@ export interface OutboxRetryOptions {
   maxRetries?: number;
   backoff?: 'fixed' | 'exponential';
   initialDelay?: number;
+  /** Maximum persisted retry delay in milliseconds. Defaults to 24 hours. */
+  maxDelay?: number;
 }
 
 export interface OutboxDeliveryOptions {

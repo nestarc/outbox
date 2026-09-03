@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS outbox_events (
   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   processed_at  TIMESTAMPTZ,
+  next_attempt_at TIMESTAMPTZ,
   retry_count   INT NOT NULL DEFAULT 0,
   max_retries   INT NOT NULL DEFAULT 5,
   last_error    TEXT,
@@ -24,9 +25,9 @@ CREATE TABLE IF NOT EXISTS outbox_events (
   CONSTRAINT chk_status CHECK (status IN ('PENDING', 'PROCESSING', 'SENT', 'FAILED'))
 );
 
--- PENDING events: polled frequently, ordered by creation time
+-- PENDING events: due-time eligibility with deterministic creation-time tie-break
 CREATE INDEX IF NOT EXISTS idx_outbox_pending
-  ON outbox_events (created_at ASC)
+  ON outbox_events (next_attempt_at ASC NULLS FIRST, created_at ASC)
   WHERE status = 'PENDING';
 
 -- PROCESSING events: stuck event recovery checks updated_at

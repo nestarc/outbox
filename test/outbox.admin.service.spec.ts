@@ -12,6 +12,7 @@ function createDbRow(overrides?: Record<string, unknown>) {
     created_at: now,
     updated_at: now,
     processed_at: null,
+    next_attempt_at: now,
     retry_count: 2,
     max_retries: 5,
     last_error: 'handler failed',
@@ -114,6 +115,7 @@ describe('OutboxAdminService', () => {
       expect.objectContaining({
         id: 'evt-1',
         eventType: 'order.created',
+        nextAttemptAt: now,
         tenantId: 'tenant-1',
         aggregateType: 'Order',
         headers: { source: 'api' },
@@ -196,6 +198,8 @@ describe('OutboxAdminService', () => {
     const [sql, ...values] = prisma.$executeRawUnsafe.mock.calls[0];
     expect(sql).toContain("status = 'PENDING'");
     expect(sql).toContain('last_error = NULL');
+    expect(sql).toContain('processed_at = NULL');
+    expect(sql).toContain('next_attempt_at = NOW()');
     expect(sql).toContain('WHERE id = $1::uuid');
     expect(sql).toContain('status = $2');
     expect(sql).not.toContain('retry_count = 0');
@@ -228,6 +232,8 @@ describe('OutboxAdminService', () => {
     const [sql, ...values] = prisma.$executeRawUnsafe.mock.calls[0];
     expect(sql).toContain('id IN ($1::uuid, $2::uuid)');
     expect(sql).toContain('status = $3');
+    expect(sql).toContain('processed_at = NULL');
+    expect(sql).toContain('next_attempt_at = NOW()');
     expect(values).toEqual(['evt-1', 'evt-2', 'FAILED']);
   });
 
@@ -242,7 +248,9 @@ describe('OutboxAdminService', () => {
     const { service, prisma } = createService();
     prisma.$executeRawUnsafe.mockResolvedValue(1);
 
-    await expect(service.markFailed('evt-1', 'manual stop')).resolves.toBe(true);
+    await expect(service.markFailed('evt-1', 'manual stop')).resolves.toBe(
+      true,
+    );
 
     const [sql, ...values] = prisma.$executeRawUnsafe.mock.calls[0];
     expect(sql).toContain("status = 'FAILED'");
@@ -254,7 +262,9 @@ describe('OutboxAdminService', () => {
     const { service, prisma } = createService();
     prisma.$executeRawUnsafe.mockResolvedValue(0);
 
-    await expect(service.markFailed('evt-1', 'manual stop')).resolves.toBe(false);
+    await expect(service.markFailed('evt-1', 'manual stop')).resolves.toBe(
+      false,
+    );
   });
 
   it('should purge only SENT rows older than the cutoff', async () => {

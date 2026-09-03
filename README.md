@@ -156,13 +156,15 @@ For an existing 0.1.x install, apply the additive upgrade file:
 psql "$DATABASE_URL" -f "$(node -e "console.log(require.resolve('@nestarc/outbox/src/sql/upgrade-0.1-to-0.2.sql'))")"
 ```
 
-Existing 0.2.x installations must drain their old pollers, apply both
-idempotent ownership upgrades, and then start the lease-aware runtime. Old
-0.2.x pollers do not heartbeat active claims.
+Existing 0.2.x installations must drain their old pollers, apply the
+idempotent ownership and retry-schedule upgrades, and then start the new
+runtime. Old 0.2.x pollers do not heartbeat active claims or persist retry due
+times.
 
 ```bash
 psql "$DATABASE_URL" -f "$(node -e "console.log(require.resolve('@nestarc/outbox/src/sql/upgrade-add-claim-token.sql'))")"
 psql "$DATABASE_URL" -f "$(node -e "console.log(require.resolve('@nestarc/outbox/src/sql/upgrade-add-lease.sql'))")"
+psql "$DATABASE_URL" -f "$(node -e "console.log(require.resolve('@nestarc/outbox/src/sql/upgrade-add-next-attempt-at.sql'))")"
 ```
 
 <details>
@@ -177,6 +179,7 @@ CREATE TABLE IF NOT EXISTS outbox_events (
   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   processed_at  TIMESTAMPTZ,
+  next_attempt_at TIMESTAMPTZ,
   retry_count   INT NOT NULL DEFAULT 0,
   max_retries   INT NOT NULL DEFAULT 5,
   last_error    TEXT,
@@ -195,9 +198,9 @@ CREATE TABLE IF NOT EXISTS outbox_events (
   CONSTRAINT chk_status CHECK (status IN ('PENDING', 'PROCESSING', 'SENT', 'FAILED'))
 );
 
--- PENDING events: polled frequently, ordered by creation time
+-- PENDING events: due-time eligibility with deterministic creation-time tie-break
 CREATE INDEX IF NOT EXISTS idx_outbox_pending
-  ON outbox_events (created_at ASC)
+  ON outbox_events (next_attempt_at ASC NULLS FIRST, created_at ASC)
   WHERE status = 'PENDING';
 
 -- PROCESSING events: stuck event recovery checks updated_at
@@ -242,6 +245,7 @@ All options passed to `OutboxModule.forRoot()` or the factory returned by `Outbo
 | `retry.maxRetries`                | `number`                        | `5`                          | Maximum delivery attempts before marking an event `FAILED`                                                                                                                          |
 | `retry.backoff`                   | `'fixed' \| 'exponential'`      | `'exponential'`              | Backoff strategy between retries                                                                                                                                                    |
 | `retry.initialDelay`              | `number`                        | `1000`                       | Initial delay in ms (base for exponential, constant for fixed)                                                                                                                      |
+| `retry.maxDelay`                  | `number`                        | `86400000`                   | Maximum persisted retry delay in ms. Must be no greater than `2147483647`; exponential delays saturate at this value.                                                               |
 | `delivery.mode`                   | `'local' \| 'publisher'`        | `'local'`                    | `local` requires registered `@OnOutboxEvent()` handlers; `publisher` sends records to a broker-style transport without requiring local handlers.                                    |
 | `transport`                       | `Type`                          | `LocalTransport`             | Custom transport class implementing `OutboxTransport` or `OutboxPublisher`.                                                                                                         |
 | `tenancy.provider`                | `OutboxTenantProvider` / `Type` | none                         | Optional tenant provider. `emit()` uses explicit `tenantId` first, then `provider.getTenantId()`. `LocalTransport` restores context with `provider.runWithTenant()` when available. |
@@ -328,7 +332,10 @@ Available methods:
 - `purgeSent({ before, limit })`
 - `getHealth(options?)`
 
-`retry()` and `retryMany()` only reset `FAILED` rows to `PENDING`; they do not touch `PROCESSING` rows and do not reset `retry_count`.
+`retry()` and `retryMany()` only reset `FAILED` rows to `PENDING`; they do not
+touch `PROCESSING` rows or reset `retry_count`. A manual retry clears
+`last_error` and `processed_at`, then sets `next_attempt_at` to the database's
+current time so it is explicitly due now.
 
 ## Tenancy
 
@@ -398,20 +405,35 @@ If `wakeup.enabled` is true but `pg` is not installed, the package logs a warnin
 
 ## Retry and Backoff
 
-When a listener throws, the event `retry_count` is incremented and the event is rescheduled as `PENDING`. The failure threshold uses the per-record `max_retries` value stored in the database at emit time, so configuration changes during rolling deployments do not affect in-flight events.
+When a listener throws, the event `retry_count` is incremented and the event is
+rescheduled as `PENDING`. That failure transition calculates the delay once and
+persists `next_attempt_at` from the PostgreSQL clock. Every poller then uses the
+stored due time, so a rolling configuration change cannot move an already
+scheduled retry. A null `next_attempt_at` is immediately eligible only for a
+never-failed row (`retry_count = 0`). The failure threshold uses the per-record
+`max_retries` value stored in the database at emit time.
 
 **Fixed backoff** — the delay between attempts is always `initialDelay` ms.
 
 **Exponential backoff** — the delay doubles on every attempt:
 
 ```
-delay = initialDelay * 2^(retry_count - 1)
+delay = min(initialDelay * 2^(retry_count - 1), maxDelay)
 ```
 
-With the defaults (`initialDelay: 1000`, `maxRetries: 5`), the event is attempted up to 5 times. After the first failed attempt, the retry delays are:
+The retry timing values must be safe integers, `initialDelay` must not exceed
+`maxDelay`, and `maxDelay` cannot exceed 2,147,483,647 ms. Invalid values fail
+module construction. Exponential calculation checks the cap before exponentiation
+so a large persisted retry count cannot overflow into an invalid PostgreSQL
+interval.
+
+With the defaults (`initialDelay: 1000`, `maxDelay: 86400000`,
+`maxRetries: 5`), the event is attempted up to 5 times. After the first failed
+attempt, the retry delays are:
 1 s → 2 s → 4 s → 8 s → FAILED
 
-`FAILED` events are kept in the table for observability and can be reprocessed manually by resetting their status to `PENDING`.
+`FAILED` events are kept in the table for observability and can be reprocessed
+with `OutboxAdminService.retry()` or `retryMany()`.
 
 ## Multi-Instance Safety
 
