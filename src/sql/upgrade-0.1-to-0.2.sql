@@ -7,7 +7,8 @@ ALTER TABLE outbox_events
   ADD COLUMN IF NOT EXISTS causation_id VARCHAR(255),
   ADD COLUMN IF NOT EXISTS headers JSONB NOT NULL DEFAULT '{}'::jsonb,
   ADD COLUMN IF NOT EXISTS occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  ADD COLUMN IF NOT EXISTS claim_token UUID;
+  ADD COLUMN IF NOT EXISTS claim_token UUID,
+  ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS idx_outbox_aggregate
   ON outbox_events (aggregate_type, aggregate_id, created_at ASC)
@@ -19,4 +20,8 @@ CREATE INDEX IF NOT EXISTS idx_outbox_tenant_pending
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_outbox_processing_claim_token
   ON outbox_events (claim_token)
+  WHERE status = 'PROCESSING';
+
+CREATE INDEX IF NOT EXISTS idx_outbox_processing_lease_expiry
+  ON outbox_events (lease_expires_at ASC)
   WHERE status = 'PROCESSING';

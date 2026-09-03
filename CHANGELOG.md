@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Pollers now claim one record on demand and protect its active callback with a
+  renewable PostgreSQL lease. Recovery only requeues expired leases, does not
+  consume retry budget, and stale completions require both the original claim
+  token and an unexpired lease.
+- `stuckThreshold` remains as a deprecated compatibility alias for
+  `lease.duration`. New `lease.heartbeatInterval` and
+  `lease.heartbeatFailureTolerance` options define heartbeat timing and loss.
 - Poller claims now use a private PostgreSQL `claim_token`. Every poller-owned
   `SENT`, retry, and `FAILED` transition compares the event id, `PROCESSING`
   status, and token; a zero-row compare-and-set is treated as a lost claim and
@@ -27,9 +34,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Migration
 
 - Existing 0.2.x databases must apply
-  `src/sql/upgrade-add-claim-token.sql` before deploying this runtime. The
-  additive nullable column and partial unique index are safe to apply more than
-  once.
+  `src/sql/upgrade-add-claim-token.sql` and `src/sql/upgrade-add-lease.sql`
+  before deploying this runtime. The additive nullable columns and partial
+  indexes are safe to apply more than once. Legacy `PROCESSING` rows with a
+  null lease retain the configured duration as their recovery threshold. Drain
+  0.2.x pollers before starting the lease-aware runtime because older pollers
+  do not heartbeat their active claims.
 - Because the required schema migration and readonly public type tightening
   affect consumers, this change is targeted at the next pre-1.0 minor release
   rather than a patch release.

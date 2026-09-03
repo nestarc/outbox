@@ -171,9 +171,9 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 |    0 | `OUT-PLAN-01`  | 문서     | `READY`    | S    | 없음                                                                                 | 이 계획만 별도 PR로 review/merge                                    |
 |    1 | `OUT-M04A`     | P0       | `READY`    | S    | 없음                                                                                 | at-least-once 전달 계약 긴급 정정                                   |
 |    2 | `OUT-M01`      | P0       | `DONE`     | L    | 없음                                                                                 | 불변 claim identity와 fenced 상태 전이                              |
-|    3 | `OUT-M02`      | P0       | `BLOCKED`  | L    | `OUT-M01`, `OUT-M03`                                                                 | lease/heartbeat/recovery와 미시작 claim 반납                        |
+|    3 | `OUT-M02`      | P0       | `DONE`     | L    | `OUT-M01`, `OUT-M03`                                                                 | lease/heartbeat/recovery와 미시작 claim 반납                        |
 |    4 | `OUT-M03`      | P0       | `DONE`     | M    | 없음                                                                                 | poll single-flight, coalescing, background 오류 격리                |
-|    5 | `OUT-M04B`     | P0       | `BLOCKED`  | L    | `OUT-M01–03`                                                                         | 실제 PostgreSQL 다중 poller/crash-window gate                       |
+|    5 | `OUT-M04B`     | P0       | `READY`    | L    | `OUT-M01–03`                                                                         | 실제 PostgreSQL 다중 poller/crash-window gate                       |
 |    6 | `OUT-M05`      | P1       | `READY`    | M    | `OUT-M01`                                                                            | `next_attempt_at` 기반 영속 retry 시각                              |
 |    7 | `OUT-M06`      | P1       | `DECISION` | M    | 없음                                                                                 | tenant producer provenance 정책                                     |
 |    8 | `OUT-M07`      | P1       | `BLOCKED`  | M    | `OUT-M06`, `OUT-M08`                                                                 | privileged/tenant-safe admin 경계                                   |
@@ -279,20 +279,20 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 
 ### `OUT-M02` — lease/heartbeat/stuck recovery와 미시작 claim 반납
 
-- 상태: `P0 / BLOCKED`; 선행 `OUT-M01`, `OUT-M03`
+- 상태: `P0 / DONE`; 선행 `OUT-M01`, `OUT-M03`
 - 문제: 오래된 모든 PROCESSING row를 owner 확인 없이 PENDING으로 되돌린다. 긴 handler나 batch 뒤쪽 row가 threshold를 넘으면 다른 poller가 같은 event를 동시에 처리할 수 있다. crash recovery가 retry budget을 소비하지 않는 의미도 불명확하다.
 
 완료 조건:
 
-- [ ] `OUT-M01`의 `claim_token` 위에 `lease_expires_at` 또는 동등한 lease 정보를 additive schema/migration으로 추가한다.
-- [ ] recovery는 만료 lease만 회수하고 이전 claimant의 늦은 write는 거부한다.
-- [ ] active callback의 lease heartbeat를 구현한다. 아직 callback을 시작하지 않은 batch row는 claim-on-demand/bounded claim 또는 동등한 명시 전략으로 lease가 시작 전에 만료되지 않게 한다.
-- [ ] lease duration, `heartbeatInterval < leaseDuration / 2`, heartbeat 실패 허용 횟수, 영구 hang/process crash 회수 시점, 현재 `stuckThreshold`의 호환/이행, retry budget 의미를 option/state 표로 고정한다.
-- [ ] `OUT-M04A`의 현재-race 설명에 새 lease/heartbeat loss와 stale completion 의미를 갱신한다.
-- [ ] shutdown은 아직 callback을 시작하지 않은 자기 claim을 자기 token으로 반납한다.
-- [ ] two-poller long-handler test에서 같은 event의 동시 callback 수가 1을 넘지 않는다.
-- [ ] process loss 뒤 lease 만료 후 eventual retry가 된다.
-- [ ] fresh install SQL과 upgrade SQL을 함께 제공한다.
+- [x] `OUT-M01`의 `claim_token` 위에 `lease_expires_at` 또는 동등한 lease 정보를 additive schema/migration으로 추가한다.
+- [x] recovery는 만료 lease만 회수하고 이전 claimant의 늦은 write는 거부한다.
+- [x] active callback의 lease heartbeat를 구현한다. 아직 callback을 시작하지 않은 batch row는 claim-on-demand/bounded claim 또는 동등한 명시 전략으로 lease가 시작 전에 만료되지 않게 한다.
+- [x] lease duration, `heartbeatInterval < leaseDuration / 2`, heartbeat 실패 허용 횟수, 영구 hang/process crash 회수 시점, 현재 `stuckThreshold`의 호환/이행, retry budget 의미를 option/state 표로 고정한다.
+- [x] `OUT-M04A`의 현재-race 설명에 새 lease/heartbeat loss와 stale completion 의미를 갱신한다.
+- [x] shutdown은 아직 callback을 시작하지 않은 자기 claim을 자기 token으로 반납한다.
+- [x] two-poller long-handler test에서 같은 event의 동시 callback 수가 1을 넘지 않는다.
+- [x] process loss 뒤 lease 만료 후 eventual retry가 된다.
+- [x] fresh install SQL과 upgrade SQL을 함께 제공한다.
 
 검증: 프로필 B/C/E. 비범위: 외부 side effect exactly-once.
 
@@ -735,11 +735,12 @@ Outbox ── durable record / publisher callback ──> Jobs adapter ──> J
 
 ## 9. 작업 기록
 
-| 날짜       | Task        | 상태   | ref/PR                                        | 검증 결과                                                                                 | 다음 정확한 행동                                                           |
-| ---------- | ----------- | ------ | --------------------------------------------- | ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| 2026-09-02 | 계획 기준선 | `DONE` | `origin/main@873f95b` 조사                    | unit 88, lint/typecheck/coverage/audit 기록; fresh DB E2E 미실행                          | `OUT-PLAN-01`로 이 문서만 먼저 review/merge                                |
-| 2026-09-03 | `OUT-M01`   | `DONE` | `codex/out-m01-fenced-claims` working tree    | unit 95, lint/typecheck/build PASS; PostgreSQL E2E 13 PASS; packed Prisma 7 consumer PASS | 변경 review 후 branch를 commit/push하고 `OUT-M04A` 또는 `OUT-M03` 진행     |
-| 2026-09-03 | `OUT-M03`   | `DONE` | `codex/out-m03-poll-coordinator` working tree | unit 100, lint/typecheck/clean build PASS; timer/notification burst/shutdown race PASS    | 변경 review 후 branch를 commit/push/merge하고 최신 main에서 `OUT-M02` 진행 |
+| 날짜       | Task        | 상태   | ref/PR                                       | 검증 결과                                                                                 | 다음 정확한 행동                                                       |
+| ---------- | ----------- | ------ | -------------------------------------------- | ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| 2026-09-02 | 계획 기준선 | `DONE` | `origin/main@873f95b` 조사                   | unit 88, lint/typecheck/coverage/audit 기록; fresh DB E2E 미실행                          | `OUT-PLAN-01`로 이 문서만 먼저 review/merge                            |
+| 2026-09-03 | `OUT-M01`   | `DONE` | `codex/out-m01-fenced-claims` working tree   | unit 95, lint/typecheck/build PASS; PostgreSQL E2E 13 PASS; packed Prisma 7 consumer PASS | 변경 review 후 branch를 commit/push하고 `OUT-M04A` 또는 `OUT-M03` 진행 |
+| 2026-09-03 | `OUT-M03`   | `DONE` | `901865c`                                    | unit 100, lint/typecheck/clean build PASS; timer/notification burst/shutdown race PASS    | local main merge `ad96d8e`에서 `OUT-M02` 진행                          |
+| 2026-09-03 | `OUT-M02`   | `DONE` | `codex/out-m02-lease-heartbeat` working tree | unit 110, PostgreSQL E2E 16, packed Prisma 7 consumer, coverage/lint/typecheck/build PASS | 변경 review 후 branch를 commit/push/merge하고 `OUT-M04A` 진행          |
 
 ### `OUT-M01` 종료 인계
 
@@ -761,12 +762,27 @@ Next exact action: diff를 review한 뒤 OUT-M01 파일만 commit/push/PR하고,
 ```text
 Task: OUT-M03
 State: DONE
-Start ref / end ref: local main@012e8d6349fd2a099e1169529a2006b94c99c00c / codex/out-m03-poll-coordinator working tree (uncommitted)
+Start ref / end ref: local main@012e8d6349fd2a099e1169529a2006b94c99c00c / 901865c96fcbc30c042283a0f6a6b4a9e1007675
 Changed files: poll single-flight coordinator와 timer 오류 격리, timer/notification burst/transient failure/shutdown contract tests, CHANGELOG, maintenance plan
 Contract / semver decision: public option/type 변화 없이 poll scheduling 내부 동작만 안전하게 제한한다. concurrent trigger는 active poll 하나와 queued rerun 하나로 coalesce하며 manual poll은 poll 오류를 계속 reject한다. patch-compatible fix다.
 Commands and exact results: 첫 RED poller test 4 FAIL/26 PASS; npm ci 649 packages; focused poller/listener 2 suites/43 tests PASS; full unit 9 suites/100 tests PASS; lint PASS; build typecheck PASS; clean build PASS; git diff --check PASS
 Unverified paths and reason: 없음. OUT-M03 범위의 profile A/C를 실행했으며 PostgreSQL schema/state machine 변경은 없다.
-External PR, run, release evidence: 없음. branch-local working tree이며 commit/push/PR/release는 수행하지 않았다.
+External PR, run, release evidence: local commit 901865c와 local main merge ad96d8e. push/PR/release는 수행하지 않았다.
 Remaining risk: lease/heartbeat/stuck recovery는 OUT-M02, LISTEN/NOTIFY 연결 실패와 reconnect lifecycle은 OUT-M09 범위다.
-Next exact action: diff를 review한 뒤 OUT-M03 파일만 commit/push/merge하고, M01/M03가 병합된 최신 main에서 OUT-M02를 시작한다.
+Next exact action: 완료. local main merge ad96d8e에서 OUT-M02를 시작했다.
+```
+
+### `OUT-M02` 종료 인계
+
+```text
+Task: OUT-M02
+State: DONE
+Start ref / end ref: local main@ad96d8e / codex/out-m02-lease-heartbeat working tree (uncommitted)
+Changed files: claim-on-demand poller, active lease heartbeat와 expired recovery/shutdown release, lease options/export, fresh/upgrade SQL, unit/PostgreSQL tests, README/CHANGELOG, ADR 0002, maintenance plan
+Contract / semver decision: lease.duration은 명시값이 deprecated stuckThreshold alias보다 우선한다. heartbeatInterval은 duration/2 미만이며 기본 duration/3, heartbeatFailureTolerance 기본 1이다. recovery는 retry budget을 소비하지 않는다. live heartbeat가 유지되는 영구 callback hang은 자동 회수하지 않고 application timeout/process termination이 필요하다. 0.2.x poller는 heartbeat를 쓰지 않으므로 lease-aware runtime 시작 전에 drain해야 한다. additive public option/schema migration이므로 기존 OUT-M01과 같은 next pre-1.0 minor 대상으로 결정했다.
+Commands and exact results: 첫 PostgreSQL RED max concurrent callback 2로 FAIL; npm ci 649 packages; unit 9 suites/110 tests PASS; PostgreSQL E2E 16 PASS; final packed 첫 시도는 정리된 DB 때문에 connection FAIL, 격리 DB 재시작 뒤 Nest 11.2.1/Prisma 7.10.0 PostgreSQL smoke PASS (sha512-9hWoNp4lFr5t4NBgoSkkRp4Mp2aVrXOkXScMiAHnT7ObOawOuKh5mH4iA6OD4UMZKLuGbXEx1LXmbIS7wKRnfw==); coverage statements 95.33%, branches 84.81%, functions 99.05%, lines 96.06%; lint/typecheck/build PASS; production audit 0; full audit 10 dev-only (high 7, moderate 1, low 2); git diff --check PASS
+Unverified paths and reason: 없음. OUT-M02 범위의 profile B/C/E와 packed consumer를 실행했다.
+External PR, run, release evidence: 없음. branch-local working tree이며 commit/push/PR/release는 수행하지 않았다.
+Remaining risk: heartbeat loss 뒤 이미 시작된 외부 side effect는 취소할 수 없어 at-least-once/idempotency가 필요하다. live heartbeat가 유지되는 영구 hang은 운영 timeout/termination이 필요하다. 실제 crash-window release gate는 OUT-M04B 범위다.
+Next exact action: diff를 review한 뒤 OUT-M02 파일만 commit/push/merge하고, 다음 최저 미완료 P0인 OUT-M04A를 진행한다.
 ```
