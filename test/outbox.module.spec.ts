@@ -2,8 +2,16 @@ import { Global, Injectable, Module } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { OutboxModule } from '../src/outbox.module';
 import { OutboxEmitter } from '../src/outbox.emitter';
+import {
+  OutboxAdminService,
+  OutboxOperatorService,
+  OutboxTenantAdminService,
+} from '../src/outbox.admin.service';
 import { OUTBOX_OPTIONS, OUTBOX_TRANSPORT } from '../src/outbox.constants';
-import type { OutboxOptions, OutboxOptionsFactory } from '../src/interfaces/outbox-options.interface';
+import type {
+  OutboxOptions,
+  OutboxOptionsFactory,
+} from '../src/interfaces/outbox-options.interface';
 import type { OutboxTransport } from '../src/interfaces/outbox-transport.interface';
 
 const mockPrisma = {
@@ -54,6 +62,24 @@ describe('OutboxModule', () => {
 
       const emitter = module.get(OutboxEmitter);
       expect(emitter).toBeInstanceOf(OutboxEmitter);
+    });
+
+    it('should provide operator and tenant-safe admin boundaries', async () => {
+      const module = await Test.createTestingModule({
+        imports: [
+          OutboxModule.forRoot({
+            prisma: mockPrisma,
+            polling: { enabled: false },
+          }),
+        ],
+      }).compile();
+
+      const operator = module.get(OutboxOperatorService);
+      expect(operator).toBeInstanceOf(OutboxOperatorService);
+      expect(module.get(OutboxAdminService)).toBe(operator);
+      expect(module.get(OutboxTenantAdminService)).toBeInstanceOf(
+        OutboxTenantAdminService,
+      );
     });
 
     it('should provide OUTBOX_OPTIONS', async () => {

@@ -3,7 +3,11 @@ export { OutboxModule } from './outbox.module';
 
 // Core
 export { OutboxEvent } from './outbox.event';
-export { OutboxAdminService } from './outbox.admin.service';
+export {
+  OutboxAdminService,
+  OutboxOperatorService,
+  OutboxTenantAdminService,
+} from './outbox.admin.service';
 export { OutboxEmitter } from './outbox.emitter';
 export { OutboxListener } from './outbox.listener';
 export { OnOutboxEvent } from './outbox.decorator';
@@ -26,6 +30,7 @@ export type {
   OutboxListOptions,
   OutboxAdminMutationResult,
   OutboxStats,
+  OutboxTenantListOptions,
 } from './interfaces/outbox-admin.interface';
 export type {
   OutboxOptions,

@@ -18,6 +18,8 @@ export interface OutboxListOptions {
   after?: Date;
 }
 
+export type OutboxTenantListOptions = Omit<OutboxListOptions, 'tenantId'>;
+
 export interface OutboxHealthOptions {
   maxOldestPendingAgeMs?: number;
   maxFailedCount?: number;

@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Global admin access is now named `OutboxOperatorService` and documented as a
+  privileged control-plane API; `OutboxAdminService` remains a deprecated
+  compatibility alias. `OutboxTenantAdminService.forTenant()` creates a fixed
+  tenant scope whose reads, stats, health checks, retries, failures, and purges
+  all include the expected tenant predicate without adding an RBAC dependency.
 - Admin `retry()` and `markFailed()` now use compare-and-set source-state
   transitions and return `applied`, `not_found`, `conflict`, or `lost_claim`.
   `markFailed()` accepts only `PENDING`; all admin mutations leave active

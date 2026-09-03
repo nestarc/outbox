@@ -1,4 +1,8 @@
-import { OutboxAdminService } from '../src/outbox.admin.service';
+import {
+  OutboxAdminService,
+  OutboxOperatorService,
+  OutboxTenantAdminService,
+} from '../src/outbox.admin.service';
 import type { OutboxOptions } from '../src/interfaces/outbox-options.interface';
 
 const now = new Date('2026-01-02T03:04:05.000Z');
@@ -374,4 +378,95 @@ describe('OutboxAdminService', () => {
       reasons: [],
     });
   });
+});
+
+describe('tenant admin boundary', () => {
+  it('keeps OutboxAdminService as the privileged operator compatibility alias', () => {
+    expect(OutboxAdminService).toBe(OutboxOperatorService);
+  });
+
+  it('adds the expected tenant predicate to every tenant-facing read', async () => {
+    const prisma = createMockPrisma();
+    const tenantAdmin = new OutboxTenantAdminService({ prisma });
+    const scoped = tenantAdmin.forTenant('tenant-a');
+    prisma.$queryRawUnsafe
+      .mockResolvedValueOnce([createDbRow({ tenant_id: 'tenant-a' })])
+      .mockResolvedValueOnce([createDbRow({ tenant_id: 'tenant-a' })])
+      .mockResolvedValueOnce([
+        {
+          pending: 1,
+          processing: 0,
+          sent: 0,
+          failed: 0,
+          oldest_pending_age_ms: 100,
+          oldest_processing_age_ms: null,
+        },
+      ]);
+
+    await scoped.list({ status: 'PENDING' });
+    await scoped.getById('evt-a');
+    await scoped.getStats();
+
+    const [listSql, ...listValues] = prisma.$queryRawUnsafe.mock.calls[0];
+    expect(listSql).toContain('tenant_id = $1');
+    expect(listSql).toContain('status = $2');
+    expect(listValues).toEqual(['tenant-a', 'PENDING', 50]);
+
+    const [getSql, ...getValues] = prisma.$queryRawUnsafe.mock.calls[1];
+    expect(getSql).toContain('id = $1::uuid');
+    expect(getSql).toContain('tenant_id = $2');
+    expect(getValues).toEqual(['evt-a', 'tenant-a']);
+
+    const [statsSql, ...statsValues] = prisma.$queryRawUnsafe.mock.calls[2];
+    expect(statsSql).toContain('WHERE tenant_id = $1');
+    expect(statsValues).toEqual(['tenant-a']);
+  });
+
+  it('adds the expected tenant predicate to every tenant-facing mutation', async () => {
+    const prisma = createMockPrisma();
+    const scoped = new OutboxTenantAdminService({ prisma }).forTenant(
+      'tenant-a',
+    );
+    prisma.$queryRawUnsafe
+      .mockResolvedValueOnce([{ outcome: 'applied' }])
+      .mockResolvedValueOnce([{ outcome: 'applied' }]);
+    prisma.$executeRawUnsafe.mockResolvedValueOnce(1).mockResolvedValueOnce(1);
+
+    await scoped.retry('evt-a');
+    await scoped.markFailed('evt-a', 'operator stop');
+    await scoped.retryMany(['evt-a', 'evt-b']);
+    await scoped.purgeSent({ before: now, limit: 10 });
+
+    const [retrySql, ...retryValues] = prisma.$queryRawUnsafe.mock.calls[0];
+    expect(retrySql).toContain('tenant_id = $3');
+    expect(retrySql).toContain('current.tenant_id = $3');
+    expect(retryValues).toEqual(['evt-a', 'FAILED', 'tenant-a']);
+
+    const [failedSql, ...failedValues] = prisma.$queryRawUnsafe.mock.calls[1];
+    expect(failedSql).toContain('tenant_id = $3');
+    expect(failedSql).toContain('current.tenant_id = $3');
+    expect(failedValues).toEqual(['evt-a', 'operator stop', 'tenant-a']);
+
+    const [manySql, ...manyValues] = prisma.$executeRawUnsafe.mock.calls[0];
+    expect(manySql).toContain('tenant_id = $4');
+    expect(manyValues).toEqual(['evt-a', 'evt-b', 'FAILED', 'tenant-a']);
+
+    const [purgeSql, ...purgeValues] = prisma.$executeRawUnsafe.mock.calls[1];
+    expect(purgeSql).toContain('tenant_id = $3');
+    expect(purgeValues).toEqual([now, 10, 'tenant-a']);
+  });
+
+  it.each([undefined, null, 42, '', ' ', ' tenant-a', 'tenant-a '])(
+    'rejects invalid tenant admin scope %p before SQL',
+    (tenantId) => {
+      const prisma = createMockPrisma();
+      const tenantAdmin = new OutboxTenantAdminService({ prisma });
+
+      expect(() => tenantAdmin.forTenant(tenantId as string)).toThrow(
+        'Outbox tenant admin scope requires a non-empty canonical tenant id',
+      );
+      expect(prisma.$queryRawUnsafe).not.toHaveBeenCalled();
+      expect(prisma.$executeRawUnsafe).not.toHaveBeenCalled();
+    },
+  );
 });

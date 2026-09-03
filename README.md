@@ -309,21 +309,53 @@ When the Prisma transaction client exposes `$executeRawUnsafe`, `emitMany()` use
 
 ## Admin and DLQ API
 
-`OutboxAdminService` is exported as a Nest provider for operational tooling.
+`OutboxOperatorService` is the privileged, global control-plane API. It can
+read payloads, headers, errors, and statistics for every tenant and can mutate
+every eligible row. Do not inject it directly into a tenant-facing HTTP
+controller or expose it without application-level operator authorization.
+`OutboxAdminService` remains as a deprecated compatibility alias for the same
+global service.
 
 ```typescript
-const failed = await admin.list({ status: 'FAILED', tenantId: 'tenant-1' });
-const retryResult = await admin.retry(failed[0].id);
+// Resolve only inside an already-authorized operator control plane.
+const operator = app.get(OutboxOperatorService);
+const failed = await operator.list({
+  status: 'FAILED',
+  tenantId: 'tenant-1',
+});
+const retryResult = await operator.retry(failed[0].id);
 if (retryResult.outcome !== 'applied') {
   // Handle not_found, conflict, or lost_claim explicitly.
 }
 
-const stats = await admin.getStats();
-const health = await admin.getHealth({
+const stats = await operator.getStats();
+const health = await operator.getHealth({
   maxOldestPendingAgeMs: 60_000,
   maxFailedCount: 10,
 });
 ```
+
+For tenant-facing tooling, first authorize the caller and derive the expected
+tenant from trusted application context, then create a fixed scope. Do not use
+a tenant id copied directly from an untrusted URL, body, or header without that
+authorization step.
+
+```typescript
+// Your guard/policy layer has already proven this identity and tenant access.
+const expectedTenantId = request.auth.tenantId;
+const tenantAdmin = app
+  .get(OutboxTenantAdminService)
+  .forTenant(expectedTenantId);
+
+const failed = await tenantAdmin.list({ status: 'FAILED' });
+const result = await tenantAdmin.retry(failed[0].id);
+const tenantStats = await tenantAdmin.getStats();
+```
+
+Every tenant-scoped read, aggregate, mutation, and purge includes the expected
+`tenant_id` predicate in its SQL. A cross-tenant id is reported as `not_found`;
+the API does not reveal whether that row exists. The package intentionally does
+not import or implement RBAC, authentication, guards, or HTTP controllers.
 
 Available methods:
 

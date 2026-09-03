@@ -10,6 +10,8 @@ import {
   OutboxEmitter,
   OutboxEvent,
   OutboxModule,
+  OutboxOperatorService,
+  OutboxTenantAdminService,
   type OutboxHandlerContext,
 } from '@nestarc/outbox';
 import { PrismaClient } from '../generated/client';
@@ -103,6 +105,16 @@ async function main(): Promise<void> {
     const emitter = moduleRef.get(OutboxEmitter);
     const listener = moduleRef.get(ModernConsumerListener);
     const admin = moduleRef.get(OutboxAdminService);
+    const operator = moduleRef.get(OutboxOperatorService);
+    const tenantAdmin = moduleRef
+      .get(OutboxTenantAdminService)
+      .forTenant('tenant-modern');
+    assert.equal(admin, operator);
+
+    if (false) {
+      // @ts-expect-error A tenant scope cannot be overridden per query.
+      await tenantAdmin.list({ tenantId: 'tenant-other' });
+    }
 
     await prisma.$transaction(async (tx) => {
       await emitter.emit(tx, new ModernConsumerEvent('prisma-7'), {
@@ -127,6 +139,9 @@ async function main(): Promise<void> {
     const stats = await admin.getStats();
     assert.equal(stats.sent, 1);
     assert.equal(stats.pending, 0);
+    const tenantStats = await tenantAdmin.getStats();
+    assert.equal(tenantStats.sent, 1);
+    assert.equal(tenantStats.pending, 0);
 
     await assert.rejects(
       prisma.$transaction(async (tx) => {

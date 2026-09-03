@@ -6,6 +6,7 @@ import type {
   OutboxListOptions,
   OutboxAdminMutationResult,
   OutboxStats,
+  OutboxTenantListOptions,
 } from './interfaces/outbox-admin.interface';
 import type { OutboxOptions } from './interfaces/outbox-options.interface';
 import type { OutboxRecord } from './interfaces/outbox-record.interface';
@@ -36,23 +37,40 @@ const RECORD_SELECT = `
   occurred_at
 `;
 
-@Injectable()
-export class OutboxAdminService {
-  constructor(
-    @Inject(OUTBOX_OPTIONS) private readonly options: OutboxOptions,
+type OutboxStatsRow = {
+  pending: number | bigint | string | null;
+  processing: number | bigint | string | null;
+  sent: number | bigint | string | null;
+  failed: number | bigint | string | null;
+  oldest_pending_age_ms: number | bigint | string | null;
+  oldest_processing_age_ms: number | bigint | string | null;
+};
+
+abstract class OutboxAdminBase<TListOptions extends OutboxListOptions> {
+  protected constructor(
+    protected readonly options: OutboxOptions,
+    private readonly expectedTenantId: string | null,
   ) {}
 
   async getStats(): Promise<OutboxStats> {
-    const rows = await this.options.prisma.$queryRaw<
-      Array<{
-        pending: number | bigint | string | null;
-        processing: number | bigint | string | null;
-        sent: number | bigint | string | null;
-        failed: number | bigint | string | null;
-        oldest_pending_age_ms: number | bigint | string | null;
-        oldest_processing_age_ms: number | bigint | string | null;
-      }>
-    >`
+    const rows = this.expectedTenantId
+      ? await this.queryRawUnsafe<OutboxStatsRow[]>(
+          `
+            SELECT
+              COUNT(*) FILTER (WHERE status = 'PENDING') AS pending,
+              COUNT(*) FILTER (WHERE status = 'PROCESSING') AS processing,
+              COUNT(*) FILTER (WHERE status = 'SENT') AS sent,
+              COUNT(*) FILTER (WHERE status = 'FAILED') AS failed,
+              EXTRACT(EPOCH FROM (NOW() - MIN(created_at) FILTER (WHERE status = 'PENDING'))) * 1000
+                AS oldest_pending_age_ms,
+              EXTRACT(EPOCH FROM (NOW() - MIN(updated_at) FILTER (WHERE status = 'PROCESSING'))) * 1000
+                AS oldest_processing_age_ms
+            FROM outbox_events
+            WHERE tenant_id = $1
+          `,
+          this.expectedTenantId,
+        )
+      : await this.options.prisma.$queryRaw<OutboxStatsRow[]>`
       SELECT
         COUNT(*) FILTER (WHERE status = 'PENDING') AS pending,
         COUNT(*) FILTER (WHERE status = 'PROCESSING') AS processing,
@@ -78,9 +96,16 @@ export class OutboxAdminService {
     };
   }
 
-  async list(options: OutboxListOptions = {}): Promise<OutboxRecord[]> {
+  async list(
+    options: TListOptions = {} as TListOptions,
+  ): Promise<OutboxRecord[]> {
     const values: unknown[] = [];
     const where: string[] = [];
+
+    if (this.expectedTenantId) {
+      values.push(this.expectedTenantId);
+      where.push(`tenant_id = $${values.length}`);
+    }
 
     if (options.status) {
       values.push(options.status);
@@ -92,7 +117,7 @@ export class OutboxAdminService {
       where.push(`event_type = $${values.length}`);
     }
 
-    if (options.tenantId) {
+    if (!this.expectedTenantId && options.tenantId) {
       values.push(options.tenantId);
       where.push(`tenant_id = $${values.length}`);
     }
@@ -126,20 +151,35 @@ export class OutboxAdminService {
   }
 
   async getById(id: string): Promise<OutboxRecord | null> {
+    const values: unknown[] = [id];
+    let tenantSql = '';
+    if (this.expectedTenantId) {
+      values.push(this.expectedTenantId);
+      tenantSql = `AND tenant_id = $${values.length}`;
+    }
     const rows = await this.queryRawUnsafe<Record<string, unknown>[]>(
       `
         SELECT ${RECORD_SELECT}
         FROM outbox_events
         WHERE id = $1::uuid
+          ${tenantSql}
         LIMIT 1
       `,
-      id,
+      ...values,
     );
 
     return rows[0] ? this.mapRecord(rows[0]) : null;
   }
 
   async retry(id: string): Promise<OutboxAdminMutationResult> {
+    const values: unknown[] = [id, 'FAILED'];
+    let targetTenantSql = '';
+    let currentTenantSql = '';
+    if (this.expectedTenantId) {
+      values.push(this.expectedTenantId);
+      targetTenantSql = `AND tenant_id = $${values.length}`;
+      currentTenantSql = `AND current.tenant_id = $${values.length}`;
+    }
     const rows = await this.queryRawUnsafe<
       Array<{ outcome: string; current_status: unknown }>
     >(
@@ -148,6 +188,7 @@ export class OutboxAdminService {
           SELECT id, status
           FROM outbox_events
           WHERE id = $1::uuid
+            ${targetTenantSql}
         ),
         updated AS (
           UPDATE outbox_events AS current
@@ -160,6 +201,7 @@ export class OutboxAdminService {
               updated_at = NOW()
           WHERE current.id = $1::uuid
             AND current.status = $2
+            ${currentTenantSql}
             AND EXISTS (
               SELECT 1
               FROM target
@@ -177,8 +219,7 @@ export class OutboxAdminService {
           END AS outcome,
           (SELECT status FROM target) AS current_status
       `,
-      id,
-      'FAILED',
+      ...values,
     );
 
     return this.mapMutationResult(rows[0]);
@@ -191,6 +232,12 @@ export class OutboxAdminService {
       .map((_, index) => `$${index + 1}::uuid`)
       .join(', ');
     const statusIndex = ids.length + 1;
+    const tenantIndex = statusIndex + 1;
+    const tenantSql = this.expectedTenantId
+      ? `AND tenant_id = $${tenantIndex}`
+      : '';
+    const values: unknown[] = [...ids, 'FAILED'];
+    if (this.expectedTenantId) values.push(this.expectedTenantId);
 
     return this.executeRawUnsafe(
       `
@@ -202,9 +249,9 @@ export class OutboxAdminService {
             updated_at = NOW()
         WHERE id IN (${placeholders})
           AND status = $${statusIndex}
+          ${tenantSql}
       `,
-      ...ids,
-      'FAILED',
+      ...values,
     );
   }
 
@@ -212,6 +259,14 @@ export class OutboxAdminService {
     id: string,
     reason: string,
   ): Promise<OutboxAdminMutationResult> {
+    const values: unknown[] = [id, reason];
+    let targetTenantSql = '';
+    let currentTenantSql = '';
+    if (this.expectedTenantId) {
+      values.push(this.expectedTenantId);
+      targetTenantSql = `AND tenant_id = $${values.length}`;
+      currentTenantSql = `AND current.tenant_id = $${values.length}`;
+    }
     const rows = await this.queryRawUnsafe<
       Array<{ outcome: string; current_status: unknown }>
     >(
@@ -220,6 +275,7 @@ export class OutboxAdminService {
           SELECT id, status
           FROM outbox_events
           WHERE id = $1::uuid
+            ${targetTenantSql}
         ),
         updated AS (
           UPDATE outbox_events AS current
@@ -232,6 +288,7 @@ export class OutboxAdminService {
               updated_at = NOW()
           WHERE current.id = $1::uuid
             AND current.status = 'PENDING'
+            ${currentTenantSql}
             AND EXISTS (
               SELECT 1
               FROM target
@@ -249,8 +306,7 @@ export class OutboxAdminService {
           END AS outcome,
           (SELECT status FROM target) AS current_status
       `,
-      id,
-      reason,
+      ...values,
     );
 
     return this.mapMutationResult(rows[0]);
@@ -258,6 +314,14 @@ export class OutboxAdminService {
 
   async purgeSent(options: { before: Date; limit?: number }): Promise<number> {
     const limit = this.normalizeLimit(options.limit);
+    const values: unknown[] = [options.before, limit];
+    let candidateTenantSql = '';
+    let deleteTenantSql = '';
+    if (this.expectedTenantId) {
+      values.push(this.expectedTenantId);
+      candidateTenantSql = `AND tenant_id = $${values.length}`;
+      deleteTenantSql = `AND tenant_id = $${values.length}`;
+    }
 
     return this.executeRawUnsafe(
       `
@@ -266,15 +330,16 @@ export class OutboxAdminService {
           FROM outbox_events
           WHERE status = 'SENT'
             AND processed_at < $1
+            ${candidateTenantSql}
           ORDER BY processed_at ASC
           LIMIT $2
           FOR UPDATE SKIP LOCKED
         )
         DELETE FROM outbox_events
         WHERE id IN (SELECT id FROM candidates)
+          ${deleteTenantSql}
       `,
-      options.before,
-      limit,
+      ...values,
     );
   }
 
@@ -438,5 +503,53 @@ export class OutboxAdminService {
   private toNumber(value: unknown): number {
     if (value === null || value === undefined) return 0;
     return Number(value);
+  }
+}
+
+/**
+ * Privileged global outbox control-plane access. The package does not perform
+ * caller authentication or RBAC for this service.
+ */
+@Injectable()
+export class OutboxOperatorService extends OutboxAdminBase<OutboxListOptions> {
+  constructor(@Inject(OUTBOX_OPTIONS) options: OutboxOptions) {
+    super(options, null);
+  }
+}
+
+/**
+ * @deprecated Use {@link OutboxOperatorService}. This compatibility name is a
+ * privileged global control-plane API and is not tenant-safe by itself.
+ */
+export { OutboxOperatorService as OutboxAdminService };
+
+class OutboxTenantAdminScope extends OutboxAdminBase<OutboxTenantListOptions> {
+  constructor(options: OutboxOptions, expectedTenantId: string) {
+    super(options, expectedTenantId);
+  }
+}
+
+/**
+ * Creates an outbox admin API whose every query is fenced by one expected
+ * tenant id. The caller remains responsible for authorizing that identity.
+ */
+@Injectable()
+export class OutboxTenantAdminService {
+  constructor(
+    @Inject(OUTBOX_OPTIONS) private readonly options: OutboxOptions,
+  ) {}
+
+  forTenant(expectedTenantId: string): OutboxTenantAdminScope {
+    if (
+      typeof expectedTenantId !== 'string' ||
+      expectedTenantId.length === 0 ||
+      expectedTenantId.trim() !== expectedTenantId
+    ) {
+      throw new Error(
+        'Outbox tenant admin scope requires a non-empty canonical tenant id',
+      );
+    }
+
+    return new OutboxTenantAdminScope(this.options, expectedTenantId);
   }
 }
