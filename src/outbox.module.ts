@@ -22,6 +22,7 @@ import { OutboxPoller } from './outbox.poller';
 import { LocalTransport } from './transports/local.transport';
 import type {
   OutboxAsyncOptions,
+  OutboxAsyncRuntimeOptions,
   OutboxOptions,
   OutboxOptionsFactory,
 } from './interfaces/outbox-options.interface';
@@ -88,7 +89,7 @@ export class OutboxModule {
       provide: OUTBOX_TRANSPORT,
       useClass: options.transport ?? LocalTransport,
     };
-    const tenantProvider = this.createAsyncTenantProvider();
+    const tenantProvider = this.createTenantProvider(options.tenantProvider);
 
     return {
       module: OutboxModule,
@@ -143,28 +144,15 @@ export class OutboxModule {
     };
   }
 
-  private static createAsyncTenantProvider(): Provider {
-    return {
-      provide: OUTBOX_TENANT_PROVIDER,
-      inject: [OUTBOX_OPTIONS],
-      useFactory: (options: OutboxOptions): OutboxTenantProvider | null => {
-        const provider = options.tenancy?.provider;
-        if (!provider) return null;
-        if (typeof provider === 'function') {
-          return new provider();
-        }
-        return provider;
-      },
-    };
-  }
-
   private static createAsyncProviders(options: OutboxAsyncOptions): Provider[] {
     if (options.useFactory) {
       return [
         {
           provide: OUTBOX_OPTIONS,
           useFactory: async (...args: any[]): Promise<OutboxOptions> =>
-            validateOutboxOptions(await options.useFactory!(...args)),
+            this.validateAsyncRuntimeOptions(
+              await options.useFactory!(...args),
+            ),
           inject: options.inject ?? [],
         },
       ];
@@ -177,7 +165,9 @@ export class OutboxModule {
           useFactory: async (
             factory: OutboxOptionsFactory,
           ): Promise<OutboxOptions> =>
-            validateOutboxOptions(await factory.createOutboxOptions()),
+            this.validateAsyncRuntimeOptions(
+              await factory.createOutboxOptions(),
+            ),
           inject: [options.useExisting],
         },
       ];
@@ -192,7 +182,9 @@ export class OutboxModule {
           useFactory: async (
             factory: OutboxOptionsFactory,
           ): Promise<OutboxOptions> =>
-            validateOutboxOptions(await factory.createOutboxOptions()),
+            this.validateAsyncRuntimeOptions(
+              await factory.createOutboxOptions(),
+            ),
           inject: [useClass],
         },
       ];
@@ -201,5 +193,23 @@ export class OutboxModule {
     throw new Error(
       'OutboxModule.forRootAsync requires one of: useFactory, useClass, or useExisting',
     );
+  }
+
+  private static validateAsyncRuntimeOptions(
+    runtimeOptions: OutboxAsyncRuntimeOptions,
+  ): OutboxOptions {
+    const candidate = runtimeOptions as OutboxOptions;
+    if (
+      Object.prototype.hasOwnProperty.call(candidate, 'transport') ||
+      Object.prototype.hasOwnProperty.call(candidate, 'isGlobal') ||
+      (candidate.tenancy &&
+        Object.prototype.hasOwnProperty.call(candidate.tenancy, 'provider'))
+    ) {
+      throw new Error(
+        'OutboxModule.forRootAsync requires transport, tenantProvider, and isGlobal to be registered as top-level async options',
+      );
+    }
+
+    return validateOutboxOptions(candidate);
   }
 }

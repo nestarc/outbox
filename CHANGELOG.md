@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Release workflow authorization now permits real npm publication only for a
+  matching `v*.*.*` tag whose commit is on `main`. Manual dispatch is dry-run
+  only; npm OIDC and GitHub `contents: write` live in separate jobs, and every
+  action in the privileged workflow is pinned to a reviewed commit SHA.
 - Runtime options from both `forRoot()` and `forRootAsync()` are now validated
   as bounded safe integers and supported enum/transport combinations before
   startup. Invalid configuration throws the typed
@@ -31,6 +35,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `forRootAsync()` now separates factory-owned runtime configuration from
+  top-level Nest registrations. Custom transports and tenant provider classes
+  are constructed by Nest with dependencies from `imports`; factory-returned
+  `transport`, `tenancy.provider`, or `isGlobal` values are rejected instead
+  of being ignored or instantiated with a bare constructor. The public async
+  factory type is tightened for the next pre-1.0 minor release.
 - Global admin access is now named `OutboxOperatorService` and documented as a
   privileged control-plane API; `OutboxAdminService` remains a deprecated
   compatibility alias. `OutboxTenantAdminService.forTenant()` creates a fixed
@@ -75,6 +85,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Testing
 
+- CI and release verification now include Node 22 + NestJS 10.4.22 + Schedule
+  4.1.2 + exact Prisma 5.22.0. The isolated strict consumer installs the packed
+  tarball, generates the legacy Prisma client, typechecks public declarations,
+  loads the shipped SQL asset, and exercises emit/poll/admin state against
+  PostgreSQL. Prisma 6.19.3 runs through the same packed legacy fixture, while
+  the existing Prisma 7.10.0 modern consumer remains in place.
+- A repository-local release policy fixture rejects mutable action refs,
+  manual real-publish paths, shared npm/GitHub release authority, and verify
+  jobs with write permissions.
 - Unit contracts cover invalid sync/async runtime configuration, delivery
   transport mismatches, and corrupt persisted rows. PostgreSQL E2E verifies the
   new retry, JSON-object, and non-processing-claim CHECK constraints and their

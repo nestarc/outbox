@@ -34,6 +34,21 @@ export const prisma = new PrismaClient({ adapter });
 
 Pass that configured client (or your Nest `PrismaService` wrapper) to `OutboxModule`. Outbox does not create or replace the application's Prisma client or connection pool.
 
+### Compatibility evidence
+
+The declared Prisma floor is exercised as a packed package, not only against
+the repository's development dependencies:
+
+| Node  | NestJS  | Schedule | Prisma | Automated evidence                                                                 |
+| ----- | ------- | -------- | ------ | ---------------------------------------------------------------------------------- |
+| 22    | 10.4.22 | 4.1.2    | 5.22.0 | generate, strict typecheck/build, SQL asset load, PostgreSQL emit/poll/admin smoke |
+| 20/22 | 10.4.22 | 4.1.2    | 6.19.3 | source E2E plus the same strict legacy packed PostgreSQL consumer                  |
+| 20/22 | 11.2.1  | 5.0.1    | 7.10.0 | source E2E plus strict packed PostgreSQL consumer                                  |
+
+All three Prisma majors consume the same package root declarations and shipped
+`src/sql` assets. Compatibility outside the declared peer ranges is not
+implied.
+
 ## Quick Start
 
 ### 1. Register the module
@@ -251,30 +266,31 @@ CREATE INDEX IF NOT EXISTS idx_outbox_tenant_pending
 
 All options passed to `OutboxModule.forRoot()` or the factory returned by `OutboxModule.forRootAsync()`.
 
-| Option                            | Type                                    | Default                      | Description                                                                                                                                            |
-| --------------------------------- | --------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `prisma`                          | class ref / instance                    | **required**                 | `PrismaService` class reference (`forRoot`, must be `@Global`) or instance (`forRootAsync`). See `PrismaLike` type for minimum interface.              |
-| `polling.enabled`                 | `boolean`                               | `true`                       | Enable or disable the polling scheduler                                                                                                                |
-| `polling.interval`                | `number`                                | `5000`                       | Milliseconds between polling cycles; safe integer from 1 through `2147483647`                                                                          |
-| `polling.batchSize`               | `number`                                | `100`                        | Maximum events processed per polling cycle; safe integer from 1 through `10000`                                                                        |
-| `retry.maxRetries`                | `number`                                | `5`                          | Maximum delivery attempts before marking an event `FAILED`; positive PostgreSQL `INT` range                                                            |
-| `retry.backoff`                   | `'fixed' \| 'exponential'`              | `'exponential'`              | Backoff strategy between retries                                                                                                                       |
-| `retry.initialDelay`              | `number`                                | `1000`                       | Initial delay in ms (base for exponential, constant for fixed); non-negative safe integer no greater than `retry.maxDelay`                             |
-| `retry.maxDelay`                  | `number`                                | `86400000`                   | Maximum persisted retry delay in ms. Must be no greater than `2147483647`; exponential delays saturate at this value.                                  |
-| `delivery.mode`                   | `'local' \| 'publisher'`                | `'local'`                    | `local` requires registered `@OnOutboxEvent()` handlers; `publisher` sends records to a broker-style transport without requiring local handlers.       |
-| `transport`                       | `Type`                                  | `LocalTransport`             | Custom transport class implementing `OutboxTransport` or `OutboxPublisher`; publisher mode requires a non-default publisher/legacy transport.          |
-| `tenancy.provider`                | `OutboxTenantProvider` / `Type`         | none                         | Optional trusted tenant provider. `LocalTransport` restores context with `provider.runWithTenant()` when available.                                    |
-| `tenancy.policy`                  | `optional \| required \| require-match` | `optional`                   | Producer provenance policy. `required` rejects a missing tenant; `require-match` also compares an explicit tenant with the provider exactly.           |
-| `hooks`                           | `OutboxHooks`                           | none                         | Optional lifecycle callbacks for emit, poll, dispatch success/failure, retry, and dead-letter metrics/tracing. Hook failures are logged and swallowed. |
-| `wakeup.enabled`                  | `boolean`                               | `false`                      | Enable PostgreSQL `LISTEN/NOTIFY` wakeup in addition to polling. Requires `pg` or a custom `clientFactory`.                                            |
-| `wakeup.channel`                  | `string`                                | `'outbox_events'`            | PostgreSQL notification channel.                                                                                                                       |
-| `wakeup.connectionString`         | `string`                                | `pg` default                 | Connection string used by the notification client when `pg` is installed.                                                                              |
-| `wakeup.reconnectDelay`           | `number`                                | `5000`                       | Positive safe-integer base reconnect delay in ms. Consecutive failures back off exponentially up to 60 seconds and reset after a successful `LISTEN`.  |
-| `lease.duration`                  | `number`                                | `stuckThreshold` or `300000` | Positive safe-integer claim lifetime in ms. Active callbacks renew the lease; expired claims are eligible for recovery.                                |
-| `lease.heartbeatInterval`         | `number`                                | `lease.duration / 3`         | Heartbeat interval in ms. Must be positive and less than half of `lease.duration`.                                                                     |
-| `lease.heartbeatFailureTolerance` | `number`                                | `1`                          | Non-negative integer count of heartbeat errors tolerated before the claimant abandons completion and lets the lease expire.                            |
-| `isGlobal`                        | `boolean`                               | `true`                       | Register the module globally so `OutboxEmitter` is available everywhere                                                                                |
-| `stuckThreshold`                  | `number`                                | `300000`                     | Deprecated positive safe-integer compatibility alias for `lease.duration`; ignored when `lease.duration` is set.                                       |
+| Option                            | Type                                    | Default                      | Description                                                                                                                                                                          |
+| --------------------------------- | --------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `prisma`                          | class ref / instance                    | **required**                 | `PrismaService` class reference (`forRoot`, must be `@Global`) or instance (`forRootAsync`). See `PrismaLike` type for minimum interface.                                            |
+| `polling.enabled`                 | `boolean`                               | `true`                       | Enable or disable the polling scheduler                                                                                                                                              |
+| `polling.interval`                | `number`                                | `5000`                       | Milliseconds between polling cycles; safe integer from 1 through `2147483647`                                                                                                        |
+| `polling.batchSize`               | `number`                                | `100`                        | Maximum events processed per polling cycle; safe integer from 1 through `10000`                                                                                                      |
+| `retry.maxRetries`                | `number`                                | `5`                          | Maximum delivery attempts before marking an event `FAILED`; positive PostgreSQL `INT` range                                                                                          |
+| `retry.backoff`                   | `'fixed' \| 'exponential'`              | `'exponential'`              | Backoff strategy between retries                                                                                                                                                     |
+| `retry.initialDelay`              | `number`                                | `1000`                       | Initial delay in ms (base for exponential, constant for fixed); non-negative safe integer no greater than `retry.maxDelay`                                                           |
+| `retry.maxDelay`                  | `number`                                | `86400000`                   | Maximum persisted retry delay in ms. Must be no greater than `2147483647`; exponential delays saturate at this value.                                                                |
+| `delivery.mode`                   | `'local' \| 'publisher'`                | `'local'`                    | `local` requires registered `@OnOutboxEvent()` handlers; `publisher` sends records to a broker-style transport without requiring local handlers.                                     |
+| `transport`                       | `Type`                                  | `LocalTransport`             | Custom transport class implementing `OutboxTransport` or `OutboxPublisher`. For `forRootAsync`, register this as a top-level option so Nest can inject its constructor dependencies. |
+| `tenancy.provider`                | `OutboxTenantProvider` / `Type`         | none                         | Optional trusted tenant provider for `forRoot`. `LocalTransport` restores context with `provider.runWithTenant()` when available.                                                    |
+| `tenantProvider`                  | `OutboxTenantProvider` / `Type`         | none                         | `forRootAsync` top-level tenant provider registration. Provider classes are constructed by Nest and may inject dependencies from `imports`.                                          |
+| `tenancy.policy`                  | `optional \| required \| require-match` | `optional`                   | Producer provenance policy. `required` rejects a missing tenant; `require-match` also compares an explicit tenant with the provider exactly.                                         |
+| `hooks`                           | `OutboxHooks`                           | none                         | Optional lifecycle callbacks for emit, poll, dispatch success/failure, retry, and dead-letter metrics/tracing. Hook failures are logged and swallowed.                               |
+| `wakeup.enabled`                  | `boolean`                               | `false`                      | Enable PostgreSQL `LISTEN/NOTIFY` wakeup in addition to polling. Requires `pg` or a custom `clientFactory`.                                                                          |
+| `wakeup.channel`                  | `string`                                | `'outbox_events'`            | PostgreSQL notification channel.                                                                                                                                                     |
+| `wakeup.connectionString`         | `string`                                | `pg` default                 | Connection string used by the notification client when `pg` is installed.                                                                                                            |
+| `wakeup.reconnectDelay`           | `number`                                | `5000`                       | Positive safe-integer base reconnect delay in ms. Consecutive failures back off exponentially up to 60 seconds and reset after a successful `LISTEN`.                                |
+| `lease.duration`                  | `number`                                | `stuckThreshold` or `300000` | Positive safe-integer claim lifetime in ms. Active callbacks renew the lease; expired claims are eligible for recovery.                                                              |
+| `lease.heartbeatInterval`         | `number`                                | `lease.duration / 3`         | Heartbeat interval in ms. Must be positive and less than half of `lease.duration`.                                                                                                   |
+| `lease.heartbeatFailureTolerance` | `number`                                | `1`                          | Non-negative integer count of heartbeat errors tolerated before the claimant abandons completion and lets the lease expire.                                                          |
+| `isGlobal`                        | `boolean`                               | `true`                       | Register the module globally so `OutboxEmitter` is available everywhere                                                                                                              |
+| `stuckThreshold`                  | `number`                                | `300000`                     | Deprecated positive safe-integer compatibility alias for `lease.duration`; ignored when `lease.duration` is set.                                                                     |
 
 Both synchronous and async registration paths validate these values before the
 module can start. Invalid configuration throws `OutboxConfigurationError` with
@@ -295,10 +311,22 @@ OutboxModule.forRootAsync({
   useFactory: (config: ConfigService, prisma: PrismaService) => ({
     prisma,
     polling: { interval: config.get('OUTBOX_POLL_INTERVAL') },
+    tenancy: { policy: 'required' },
   }),
   inject: [ConfigService, PrismaService],
+  tenantProvider: RequestTenantProvider,
+  transport: KafkaTransport,
+  isGlobal: true,
 });
 ```
+
+`useFactory` and `OutboxOptionsFactory` own runtime values only. Provider graph
+registrations (`transport`, `tenantProvider`) and module scope (`isGlobal`) are
+top-level `forRootAsync` options; returning any of them from the factory is
+rejected during module compilation instead of being silently ignored. Nest
+constructs top-level provider classes, so their constructor dependencies must
+be exported by one of the modules listed in `imports`. Passing an already
+created tenant provider value is also supported.
 
 ## Event Metadata
 
@@ -646,7 +674,8 @@ export class KafkaTransport implements OutboxPublisher {
 }
 ```
 
-Register it via module options:
+Register it via module options (`transport` stays top-level when using
+`forRootAsync`):
 
 ```typescript
 OutboxModule.forRoot({

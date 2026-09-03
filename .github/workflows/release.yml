@@ -1,20 +1,19 @@
 name: Release
 
 # Publishes @nestarc/outbox to npm when a tag matching `v*.*.*` is
-# pushed, or when the workflow is dispatched manually (emergency fallback).
+# pushed. Manual dispatch always runs the verification and npm dry-run only.
 #
 # Flow:
 #   1. verify job reads package.json version and confirms it matches the tag.
 #   2. build-and-test runs the prepublishOnly chain, the exact modern
 #      NestJS 11 / Prisma 7 PostgreSQL gates, then the preserved legacy
 #      NestJS 10 / Prisma 6 unit and PostgreSQL runtime lane.
-#   3. publish runs `npm publish --provenance --access public` through npm
-#      Trusted Publishing and creates a GitHub Release with the CHANGELOG
-#      excerpt.
+#   3. a tag-only npm job publishes through Trusted Publishing with OIDC.
+#   4. a separate tag-only job creates the GitHub Release with contents write.
 #
 # Permissions:
-#   - id-token: write is required for npm Trusted Publishing/OIDC.
-#   - contents: write is required to create the GitHub Release.
+#   - publish-npm receives contents read + id-token write, never contents write.
+#   - github-release receives contents write, never id-token write.
 #
 # npm Trusted Publisher settings:
 #   - Publisher: GitHub Actions
@@ -35,11 +34,6 @@ on:
     tags:
       - 'v*.*.*'
   workflow_dispatch:
-    inputs:
-      dry_run:
-        description: 'Run the full pipeline but skip the actual npm publish (default: false)'
-        type: boolean
-        default: false
 
 concurrency:
   group: release-${{ github.ref }}
@@ -52,14 +46,18 @@ jobs:
   verify:
     name: Verify tag matches package.json
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       version: ${{ steps.read.outputs.version }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
           cache: npm
@@ -71,23 +69,38 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "package.json version: $VERSION"
 
-      - name: Ensure git tag matches package.json (tag-push only)
+      - name: Authorize immutable release ref
         if: github.event_name == 'push'
         env:
           GIT_REF_NAME: ${{ github.ref_name }}
+          GIT_REF_TYPE: ${{ github.ref_type }}
+          RELEASE_SHA: ${{ github.sha }}
           PKG_VERSION: ${{ steps.read.outputs.version }}
         run: |
+          test "$GIT_REF_TYPE" = "tag"
+          case "$GIT_REF_NAME" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::Release ref must be an exact v*.*.* tag"; exit 1 ;;
+          esac
           TAG_VERSION="${GIT_REF_NAME#v}"
           if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
             echo "::error::Tag $GIT_REF_NAME does not match package.json version $PKG_VERSION"
             exit 1
           fi
-          echo "Tag $GIT_REF_NAME matches package.json $PKG_VERSION"
+          test "$(git rev-list -n 1 "$GIT_REF_NAME")" = "$RELEASE_SHA"
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$RELEASE_SHA" refs/remotes/origin/main; then
+            echo "::error::Release tag must point to a commit on protected main"
+            exit 1
+          fi
+          echo "Tag $GIT_REF_NAME matches package.json and protected main ancestry"
 
   build-and-test:
     name: Full prepublishOnly chain
     needs: verify
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     services:
       postgres:
@@ -109,10 +122,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
           cache: npm
@@ -129,6 +142,12 @@ jobs:
 
       - name: Strict packed NestJS 11.2.1 + Prisma 7.10.0 consumer
         run: npm run test:modern-consumer
+
+      - name: Strict packed NestJS 10.4.22 + Prisma 5.22.0 consumer
+        run: npm run test:prisma5-consumer
+
+      - name: Strict packed NestJS 10.4.22 + Prisma 6.19.3 consumer
+        run: npm run test:prisma6-consumer
 
       - name: Install exact legacy NestJS 10.4.22 + Prisma 6.19.3 tuple
         run: |
@@ -161,32 +180,44 @@ jobs:
       - name: Pack (dry run)
         run: npm pack --dry-run
 
-      - name: Upload dist artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-dist
-          path: |
-            dist/
-            package.json
-            README.md
-            LICENSE
-          if-no-files-found: error
-          retention-days: 14
+  manual-dry-run:
+    name: Manual npm publish dry-run
+    if: github.event_name == 'workflow_dispatch'
+    needs: [verify, build-and-test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-  publish:
+      - name: Setup Node with npm registry
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+
+      - name: Install and build
+        run: npm ci && npm run build
+
+      - name: Publish dry-run
+        run: npm publish --access public --dry-run
+
+  publish-npm:
     name: Publish to npm
+    if: github.event_name == 'push'
     needs: [verify, build-and-test]
     runs-on: ubuntu-latest
     environment: npm
     permissions:
-      contents: write
+      contents: read
       id-token: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Setup Node with npm registry
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '24'
           registry-url: https://registry.npmjs.org
@@ -200,16 +231,21 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Publish (dry run)
-        if: github.event_name == 'workflow_dispatch' && inputs.dry_run == true
-        run: npm publish --provenance --access public --dry-run
-
       - name: Publish
-        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.dry_run != true)
         run: npm publish --provenance --access public
 
+  github-release:
+    name: Create GitHub Release
+    if: github.event_name == 'push'
+    needs: [verify, build-and-test, publish-npm]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
       - name: Extract CHANGELOG entry for this version
-        if: github.event_name == 'push'
         id: changelog
         env:
           VERSION: ${{ needs.verify.outputs.version }}
@@ -229,8 +265,7 @@ jobs:
           echo "body-file=release-body.md" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
-        if: github.event_name == 'push'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}

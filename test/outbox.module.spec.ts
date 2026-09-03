@@ -1,4 +1,4 @@
-import { Global, Injectable, Module } from '@nestjs/common';
+import { Global, Inject, Injectable, Module } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { OutboxModule } from '../src/outbox.module';
 import { OutboxEmitter } from '../src/outbox.emitter';
@@ -7,12 +7,18 @@ import {
   OutboxOperatorService,
   OutboxTenantAdminService,
 } from '../src/outbox.admin.service';
-import { OUTBOX_OPTIONS, OUTBOX_TRANSPORT } from '../src/outbox.constants';
+import {
+  OUTBOX_OPTIONS,
+  OUTBOX_TENANT_PROVIDER,
+  OUTBOX_TRANSPORT,
+} from '../src/outbox.constants';
 import type {
+  OutboxAsyncRuntimeOptions,
   OutboxOptions,
   OutboxOptionsFactory,
 } from '../src/interfaces/outbox-options.interface';
 import type { OutboxTransport } from '../src/interfaces/outbox-transport.interface';
+import type { OutboxTenantProvider } from '../src/interfaces/outbox-tenancy.interface';
 
 const mockPrisma = {
   $queryRaw: jest.fn(),
@@ -241,7 +247,7 @@ describe('OutboxModule', () => {
     it('should support useClass', async () => {
       @Injectable()
       class OutboxConfigService implements OutboxOptionsFactory {
-        createOutboxOptions(): OutboxOptions {
+        createOutboxOptions(): OutboxAsyncRuntimeOptions {
           return {
             prisma: mockPrisma,
             polling: { enabled: false },
@@ -265,7 +271,7 @@ describe('OutboxModule', () => {
     it('should support useExisting', async () => {
       @Injectable()
       class ExistingConfigService implements OutboxOptionsFactory {
-        createOutboxOptions(): OutboxOptions {
+        createOutboxOptions(): OutboxAsyncRuntimeOptions {
           return {
             prisma: mockPrisma,
             polling: { enabled: false },
@@ -293,6 +299,90 @@ describe('OutboxModule', () => {
       const options = module.get<OutboxOptions>(OUTBOX_OPTIONS);
       expect(options.retry?.maxRetries).toBe(15);
     });
+
+    it('lets Nest construct tenant providers and transports with imported dependencies', async () => {
+      const SUPPORT_TOKEN = Symbol('ASYNC_REGISTRATION_SUPPORT');
+      const support = { tenantId: 'tenant-from-di' };
+
+      @Module({
+        providers: [{ provide: SUPPORT_TOKEN, useValue: support }],
+        exports: [SUPPORT_TOKEN],
+      })
+      class SupportModule {}
+
+      @Injectable()
+      class InjectedTenantProvider implements OutboxTenantProvider {
+        constructor(
+          @Inject(SUPPORT_TOKEN)
+          readonly dependency: typeof support,
+        ) {}
+
+        getTenantId(): string {
+          return this.dependency.tenantId;
+        }
+      }
+
+      @Injectable()
+      class InjectedTransport implements OutboxTransport {
+        constructor(
+          @Inject(SUPPORT_TOKEN)
+          readonly dependency: typeof support,
+        ) {}
+
+        async dispatch(): Promise<void> {}
+      }
+
+      const module = await Test.createTestingModule({
+        imports: [
+          OutboxModule.forRootAsync({
+            imports: [SupportModule],
+            useFactory: () => ({
+              prisma: mockPrisma,
+              polling: { enabled: false },
+            }),
+            tenantProvider: InjectedTenantProvider,
+            transport: InjectedTransport,
+          }),
+        ],
+      }).compile();
+
+      const tenantProvider = module.get<InjectedTenantProvider>(
+        OUTBOX_TENANT_PROVIDER,
+      );
+      const transport = module.get<InjectedTransport>(OUTBOX_TRANSPORT);
+      expect(tenantProvider).toBeInstanceOf(InjectedTenantProvider);
+      expect(tenantProvider.dependency).toBe(support);
+      expect(await tenantProvider.getTenantId()).toBe('tenant-from-di');
+      expect(transport).toBeInstanceOf(InjectedTransport);
+      expect(transport.dependency).toBe(support);
+    });
+
+    it.each([
+      ['transport', { transport: class UnsupportedTransport {} }],
+      ['isGlobal', { isGlobal: false }],
+      [
+        'tenancy.provider',
+        { tenancy: { provider: class UnsupportedTenantProvider {} } },
+      ],
+    ])(
+      'rejects factory-owned async registration option %s',
+      async (_key, extra) => {
+        await expect(
+          Test.createTestingModule({
+            imports: [
+              OutboxModule.forRootAsync({
+                useFactory: () =>
+                  ({
+                    prisma: mockPrisma,
+                    polling: { enabled: false },
+                    ...extra,
+                  }) as any,
+              }),
+            ],
+          }).compile(),
+        ).rejects.toThrow(/top-level async options/);
+      },
+    );
 
     it('should throw if no provider method is given', () => {
       expect(() => {

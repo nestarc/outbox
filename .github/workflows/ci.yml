@@ -83,6 +83,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - node: '22'
+            nestjs: '10.4.22'
+            schedule: '4.1.2'
+            prisma: '5.22.0'
           - node: '20'
             nestjs: '10.4.22'
             schedule: '4.1.2'
@@ -125,8 +129,11 @@ jobs:
             @nestjs/testing@${{ matrix.nestjs }} \
             @nestjs/schedule@${{ matrix.schedule }} \
             prisma@${{ matrix.prisma }} \
-            @prisma/client@${{ matrix.prisma }} \
-            @prisma/adapter-pg@${{ matrix.prisma }}
+            @prisma/client@${{ matrix.prisma }}
+
+      - name: Install exact Prisma driver adapter
+        if: matrix.prisma != '5.22.0'
+        run: npm install --no-save --strict-peer-deps --no-audit --no-fund @prisma/adapter-pg@${{ matrix.prisma }}
 
       - name: Assert exact runtime tuple
         run: |
@@ -135,8 +142,11 @@ jobs:
             "@nestjs/core@${{ matrix.nestjs }}" \
             "@nestjs/schedule@${{ matrix.schedule }}" \
             "prisma@${{ matrix.prisma }}" \
-            "@prisma/client@${{ matrix.prisma }}" \
-            "@prisma/adapter-pg@${{ matrix.prisma }}"
+            "@prisma/client@${{ matrix.prisma }}"
+
+      - name: Assert exact Prisma driver adapter
+        if: matrix.prisma != '5.22.0'
+        run: node scripts/assert-installed-versions.js "@prisma/adapter-pg@${{ matrix.prisma }}"
 
       - name: Unit tests
         run: npm test
@@ -147,6 +157,14 @@ jobs:
       - name: Strict packed modern consumer with PostgreSQL
         if: matrix.node == '22' && matrix.nestjs == '11.2.1' && matrix.prisma == '7.10.0'
         run: npm run test:modern-consumer
+
+      - name: Strict packed Prisma 5 consumer with PostgreSQL
+        if: matrix.node == '22' && matrix.nestjs == '10.4.22' && matrix.prisma == '5.22.0'
+        run: npm run test:prisma5-consumer
+
+      - name: Strict packed Prisma 6 consumer with PostgreSQL
+        if: matrix.node == '22' && matrix.nestjs == '10.4.22' && matrix.prisma == '6.19.3'
+        run: npm run test:prisma6-consumer
 
       - name: Coverage (primary cell only)
         if: matrix.node == '22' && matrix.nestjs == '11.2.1' && matrix.prisma == '7.10.0'

@@ -47,6 +47,7 @@ export type {
 export type {
   OutboxOptions,
   OutboxAsyncOptions,
+  OutboxAsyncRuntimeOptions,
   OutboxOptionsFactory,
   OutboxPollingOptions,
   OutboxRetryOptions,

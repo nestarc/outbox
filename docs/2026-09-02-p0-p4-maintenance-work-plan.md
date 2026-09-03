@@ -119,9 +119,9 @@ Next exact action:
 | Node       | `>=20`                                  | CI Node 20/22, publish Node 24         | Node 20 EOL 이후 정책은 `OUT-M14`에서 결정한다.                              |
 | NestJS     | 10/11                                   | exact 10.4.22, 11.2.1                  | Nest 12는 peer 확대 전 strict packed PostgreSQL 증거가 필요하다.             |
 | Schedule   | 4/5                                     | Nest 10×Schedule 4, Nest 11×Schedule 5 | Nest 12와 함께 현재 조합을 재검증한다.                                       |
-| Prisma     | 5/6/7                                   | exact 6.19.3, 7.10.0                   | Prisma 5 선언과 CI가 불일치한다. `OUT-M13`이 소유한다.                       |
+| Prisma     | 5/6/7                                   | exact 5.22.0, 6.19.3, 7.10.0           | 세 major의 strict packed PostgreSQL consumer와 CI/release lane을 유지한다.   |
 | PostgreSQL | transactional SQL implementation        | PostgreSQL 16 CI/release               | 최소 지원 버전은 운영 문서에서 명시하고 migration 경로를 실제 DB로 검증한다. |
-| package    | CommonJS root + deep-resolved SQL files | modern packed consumer                 | 명시적 `exports` 여부는 `OUT-M23`에서 ADR 후 결정한다.                       |
+| package    | CommonJS root + deep-resolved SQL files | legacy/modern packed consumers         | 명시적 `exports` 여부는 `OUT-M23`에서 ADR 후 결정한다.                       |
 
 Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/nodejs/Release#release-schedule)을 기준으로 한다. 새 Nest/Prisma major는 “현재 최신”이라는 이유만으로 peer range에 먼저 추가하지 않는다.
 
@@ -180,9 +180,9 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 |    9 | `OUT-M08`      | P1       | `DONE`     | M    | `OUT-M01–02`, `OUT-M05`                                                              | admin 상태 전이 CAS                                                 |
 |   10 | `OUT-M09`      | P1       | `DONE`     | M    | `OUT-M03`                                                                            | LISTEN/NOTIFY degrade/reconnect lifecycle                           |
 |   11 | `OUT-M10`      | P1       | `DONE`     | M    | 없음                                                                                 | runtime option/state invariant validation                           |
-|   12 | `OUT-M11`      | P1       | `READY`    | M    | 없음                                                                                 | `forRootAsync` DI와 async option 계약                               |
-|   13 | `OUT-M12`      | P1       | `READY`    | M    | 없음                                                                                 | release authorization, least privilege, immutable actions           |
-|   14 | `OUT-M13`      | P1       | `READY`    | M    | 없음                                                                                 | Prisma 5 지원 선언 증거 복구                                        |
+|   12 | `OUT-M11`      | P1       | `DONE`     | M    | 없음                                                                                 | `forRootAsync` DI와 async option 계약                               |
+|   13 | `OUT-M12`      | P1       | `EXTERNAL` | M    | GitHub repository/environment 관리자 인증                                            | release authorization, least privilege, immutable actions           |
+|   14 | `OUT-M13`      | P1       | `DONE`     | M    | 없음                                                                                 | Prisma 5 지원 선언 증거 복구                                        |
 |   15 | `OUT-M14`      | P1       | `DECISION` | M    | 없음                                                                                 | Node LTS/Nest 12 현재 지원 정책                                     |
 |   16 | `OUT-M21`      | P1       | `BLOCKED`  | M    | `OUT-M12`                                                                            | pack-once, exact artifact publish/provenance                        |
 |   17 | `OUT-M15`      | P2       | `READY`    | S    | `OUT-M01`                                                                            | hook의 불변성·commit 의미 문서화                                    |
@@ -437,48 +437,48 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 
 ### `OUT-M11` — `forRootAsync` Nest DI와 option ownership
 
-- 상태: `P1 / READY`
+- 상태: `P1 / DONE`
 
 완료 조건:
 
-- [ ] tenant provider class/transport는 bare `new`가 아니라 Nest DI가 생성한다.
-- [ ] async factory가 뒤늦게 provider class를 반환하는 형태에 의존하지 않고, top-level provider/token registration이 Nest provider graph에 먼저 참여하게 한다.
-- [ ] factory-returned option과 top-level registration option의 소유권을 타입으로 구분한다.
-- [ ] `transport`, `isGlobal`, tenant provider의 실제 지원 형태가 README와 일치한다.
-- [ ] constructor injection이 필요한 provider와 custom transport module test가 Nest 10/11에서 통과한다.
-- [ ] unsupported async shape는 compile 또는 init에서 조용히 무시되지 않는다.
+- [x] tenant provider class/transport는 bare `new`가 아니라 Nest DI가 생성한다.
+- [x] async factory가 뒤늦게 provider class를 반환하는 형태에 의존하지 않고, top-level provider/token registration이 Nest provider graph에 먼저 참여하게 한다.
+- [x] factory-returned option과 top-level registration option의 소유권을 타입으로 구분한다.
+- [x] `transport`, `isGlobal`, tenant provider의 실제 지원 형태가 README와 일치한다.
+- [x] constructor injection이 필요한 provider와 custom transport module test가 Nest 10/11에서 통과한다.
+- [x] unsupported async shape는 compile 또는 init에서 조용히 무시되지 않는다.
 
 검증: 프로필 A/D. 공개 option shape가 깨지면 pre-1.0 minor로 낸다.
 
 ### `OUT-M12` — release authorization과 least privilege
 
-- 상태: `P1 / READY`
+- 상태: `P1 / EXTERNAL` — repository workflow 변경은 완료됐으나 GitHub ruleset/npm environment 변경에 필요한 관리자 인증이 없다.
 - 문제: manual dispatch 기본값이 publish이고 tag/version check는 tag push에만 적용된다. publish와 GitHub Release 권한도 같은 job 경계에 있고 Actions가 mutable major tag다.
 
 완료 조건:
 
-- [ ] 실제 publish는 protected main의 immutable matching `v*` tag만 허용한다.
-- [ ] manual dispatch는 dry-run only 또는 exact protected SHA/tag confirmation을 요구한다.
-- [ ] actionlint 또는 repository-local workflow policy fixture로 manual publish 기본값, job-level permission, immutable action ref의 첫 RED를 자동 검증한다.
-- [ ] npm publish job은 OIDC만, GitHub Release job은 contents write만 가져 서로의 고권한을 공유하지 않는다.
-- [ ] verify jobs는 `contents: read`이며 write/OIDC가 없다.
-- [ ] privileged third-party action과 official actions를 reviewed commit SHA로 pin한다.
+- [ ] 실제 publish는 protected main의 immutable matching `v*` tag만 허용한다. (workflow의 tag/version/main ancestry 검증은 완료; main/tag immutability ruleset은 외부 관리자 작업)
+- [x] manual dispatch는 dry-run only 또는 exact protected SHA/tag confirmation을 요구한다.
+- [x] actionlint 또는 repository-local workflow policy fixture로 manual publish 기본값, job-level permission, immutable action ref의 첫 RED를 자동 검증한다.
+- [x] npm publish job은 OIDC만, GitHub Release job은 contents write만 가져 서로의 고권한을 공유하지 않는다.
+- [x] verify jobs는 `contents: read`이며 write/OIDC가 없다.
+- [x] privileged third-party action과 official actions를 reviewed commit SHA로 pin한다.
 - [ ] main/tag ruleset, required CI, force-push/tag 이동 차단, npm environment review/deployment policy를 관리자 설정에서 기록한다.
-- [ ] 관리자 설정 변경 전 read-only before-state와 대상 repo/environment를 캡처하고 명시적 권한 범위 안에서만 변경한다.
-- [ ] settings 작업이 별도 권한 때문에 남으면 같은 ID를 `EXTERNAL`로 인계하고 코드 부분만 DONE 처리하지 않는다.
+- [x] 관리자 설정 변경 전 read-only before-state와 대상 repo/environment를 캡처하고 명시적 권한 범위 안에서만 변경한다.
+- [x] settings 작업이 별도 권한 때문에 남으면 같은 ID를 `EXTERNAL`로 인계하고 코드 부분만 DONE 처리하지 않는다.
 
 검증: 프로필 E와 GitHub settings evidence.
 
 ### `OUT-M13` — Prisma 5 지원 증거 복구
 
-- 상태: `P1 / READY`
+- 상태: `P1 / DONE`
 
 완료 조건:
 
-- [ ] peer의 Prisma 5 선언을 유지하려면 Node 22 + Nest 10.4.22 + Schedule 4 + exact Prisma 5.22.x의 generate/build/PostgreSQL packed-consumer lane을 둔다.
-- [ ] 5/6/7에서 SQL asset와 public declarations를 같은 방식으로 소비한다.
-- [ ] 유지할 수 없으면 다음 breaking release에서 range를 좁히고 README/CHANGELOG migration을 제공한다.
-- [ ] 현재 6.19.3/7.10.0 lanes와 modern consumer는 그대로 보존한다.
+- [x] peer의 Prisma 5 선언을 유지하려면 Node 22 + Nest 10.4.22 + Schedule 4 + exact Prisma 5.22.x의 generate/build/PostgreSQL packed-consumer lane을 둔다.
+- [x] 5/6/7에서 SQL asset와 public declarations를 같은 방식으로 소비한다.
+- [x] 유지할 수 없으면 다음 breaking release에서 range를 좁히고 README/CHANGELOG migration을 제공한다. (해당 없음: exact 5.22.0 검증 통과)
+- [x] 현재 6.19.3/7.10.0 lanes와 modern consumer는 그대로 보존한다.
 
 검증: 프로필 B/D/E.
 
@@ -735,20 +735,23 @@ Outbox ── durable record / publisher callback ──> Jobs adapter ──> J
 
 ## 9. 작업 기록
 
-| 날짜       | Task        | 상태   | ref/PR                                           | 검증 결과                                                                                       | 다음 정확한 행동                                                       |
-| ---------- | ----------- | ------ | ------------------------------------------------ | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| 2026-09-02 | 계획 기준선 | `DONE` | `origin/main@873f95b` 조사                       | unit 88, lint/typecheck/coverage/audit 기록; fresh DB E2E 미실행                                | `OUT-PLAN-01`로 이 문서만 먼저 review/merge                            |
-| 2026-09-03 | `OUT-M01`   | `DONE` | `codex/out-m01-fenced-claims` working tree       | unit 95, lint/typecheck/build PASS; PostgreSQL E2E 13 PASS; packed Prisma 7 consumer PASS       | 변경 review 후 branch를 commit/push하고 `OUT-M04A` 또는 `OUT-M03` 진행 |
-| 2026-09-03 | `OUT-M03`   | `DONE` | `901865c`                                        | unit 100, lint/typecheck/clean build PASS; timer/notification burst/shutdown race PASS          | local main merge `ad96d8e`에서 `OUT-M02` 진행                          |
-| 2026-09-03 | `OUT-M02`   | `DONE` | `a14d119`                                        | unit 110, PostgreSQL E2E 16, packed Prisma 7 consumer, coverage/lint/typecheck/build PASS       | local main merge `95b4849` 완료; `OUT-M04A` 진행                       |
-| 2026-09-03 | `OUT-M04A`  | `DONE` | local main `9418db9` working tree                | README delivery contract/spec authority/CHANGELOG 대조; scoped format/lint/typecheck/build PASS | `OUT-M04B` PostgreSQL gate와 함께 완료                                 |
-| 2026-09-03 | `OUT-M04B`  | `DONE` | local main `9418db9` working tree                | unit 110; PostgreSQL E2E 19; packed Prisma 7 consumer; coverage/audit/lint/build PASS           | 변경 review 후 commit/push/PR                                          |
-| 2026-09-03 | `OUT-M05`   | `DONE` | `codex/out-m05-persisted-retry-due` working tree | unit 115; PostgreSQL E2E 22; packed Prisma 7 consumer; lint/typecheck/build PASS                | 변경 review 후 commit/push/PR하고 `OUT-M06` 정책 결정                  |
-| 2026-09-03 | `OUT-M06`   | `DONE` | `codex/out-m06-tenant-provenance` working tree   | unit 129; PostgreSQL E2E 22; packed Prisma 7 consumer; lint/typecheck/clean build PASS          | 변경 review 후 commit/push/PR하고 `OUT-M08` admin 상태 전이 CAS 진행   |
-| 2026-09-03 | `OUT-M08`   | `DONE` | `01f3fcd`                                        | unit 134; PostgreSQL E2E 25; packed Prisma 7 consumer; lint/typecheck/clean build PASS          | local main merge `707eb59` 완료; `OUT-M07` 진행                        |
-| 2026-09-03 | `OUT-M07`   | `DONE` | `4097583`                                        | unit 145; PostgreSQL E2E 26; packed Prisma 7 consumer; lint/typecheck/build PASS                | local main merge 완료; 다음 `READY` P1인 `OUT-M09` 진행                |
-| 2026-09-03 | `OUT-M09`   | `DONE` | `codex/out-m09-listener-lifecycle` working tree  | unit 155; PostgreSQL E2E 26; packed Prisma 7 consumer; lint/typecheck/clean build PASS          | 변경 review 후 commit/push/PR하고 다음 `READY` P1인 `OUT-M10` 진행     |
-| 2026-09-03 | `OUT-M10`   | `DONE` | `codex/out-m10-runtime-invariants` working tree  | unit 170; PostgreSQL E2E 27; packed Prisma 7 consumer; lint/typecheck/clean build PASS          | 변경 review 후 commit/push/PR하고 다음 `READY` P1인 `OUT-M11` 진행     |
+| 날짜       | Task        | 상태       | ref/PR                                           | 검증 결과                                                                                       | 다음 정확한 행동                                                       |
+| ---------- | ----------- | ---------- | ------------------------------------------------ | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| 2026-09-02 | 계획 기준선 | `DONE`     | `origin/main@873f95b` 조사                       | unit 88, lint/typecheck/coverage/audit 기록; fresh DB E2E 미실행                                | `OUT-PLAN-01`로 이 문서만 먼저 review/merge                            |
+| 2026-09-03 | `OUT-M01`   | `DONE`     | `codex/out-m01-fenced-claims` working tree       | unit 95, lint/typecheck/build PASS; PostgreSQL E2E 13 PASS; packed Prisma 7 consumer PASS       | 변경 review 후 branch를 commit/push하고 `OUT-M04A` 또는 `OUT-M03` 진행 |
+| 2026-09-03 | `OUT-M03`   | `DONE`     | `901865c`                                        | unit 100, lint/typecheck/clean build PASS; timer/notification burst/shutdown race PASS          | local main merge `ad96d8e`에서 `OUT-M02` 진행                          |
+| 2026-09-03 | `OUT-M02`   | `DONE`     | `a14d119`                                        | unit 110, PostgreSQL E2E 16, packed Prisma 7 consumer, coverage/lint/typecheck/build PASS       | local main merge `95b4849` 완료; `OUT-M04A` 진행                       |
+| 2026-09-03 | `OUT-M04A`  | `DONE`     | local main `9418db9` working tree                | README delivery contract/spec authority/CHANGELOG 대조; scoped format/lint/typecheck/build PASS | `OUT-M04B` PostgreSQL gate와 함께 완료                                 |
+| 2026-09-03 | `OUT-M04B`  | `DONE`     | local main `9418db9` working tree                | unit 110; PostgreSQL E2E 19; packed Prisma 7 consumer; coverage/audit/lint/build PASS           | 변경 review 후 commit/push/PR                                          |
+| 2026-09-03 | `OUT-M05`   | `DONE`     | `codex/out-m05-persisted-retry-due` working tree | unit 115; PostgreSQL E2E 22; packed Prisma 7 consumer; lint/typecheck/build PASS                | 변경 review 후 commit/push/PR하고 `OUT-M06` 정책 결정                  |
+| 2026-09-03 | `OUT-M06`   | `DONE`     | `codex/out-m06-tenant-provenance` working tree   | unit 129; PostgreSQL E2E 22; packed Prisma 7 consumer; lint/typecheck/clean build PASS          | 변경 review 후 commit/push/PR하고 `OUT-M08` admin 상태 전이 CAS 진행   |
+| 2026-09-03 | `OUT-M08`   | `DONE`     | `01f3fcd`                                        | unit 134; PostgreSQL E2E 25; packed Prisma 7 consumer; lint/typecheck/clean build PASS          | local main merge `707eb59` 완료; `OUT-M07` 진행                        |
+| 2026-09-03 | `OUT-M07`   | `DONE`     | `4097583`                                        | unit 145; PostgreSQL E2E 26; packed Prisma 7 consumer; lint/typecheck/build PASS                | local main merge 완료; 다음 `READY` P1인 `OUT-M09` 진행                |
+| 2026-09-03 | `OUT-M09`   | `DONE`     | `codex/out-m09-listener-lifecycle` working tree  | unit 155; PostgreSQL E2E 26; packed Prisma 7 consumer; lint/typecheck/clean build PASS          | 변경 review 후 commit/push/PR하고 다음 `READY` P1인 `OUT-M10` 진행     |
+| 2026-09-03 | `OUT-M10`   | `DONE`     | `codex/out-m10-runtime-invariants` working tree  | unit 170; PostgreSQL E2E 27; packed Prisma 7 consumer; lint/typecheck/clean build PASS          | 변경 review 후 commit/push/PR하고 다음 `READY` P1인 `OUT-M11` 진행     |
+| 2026-09-03 | `OUT-M11`   | `DONE`     | local main `13bfb8c` working tree                | unit 174; Nest 11 source + Nest 10 packed async DI; lint/typecheck/build PASS                   | 변경 review 후 commit/push/PR                                          |
+| 2026-09-03 | `OUT-M12`   | `EXTERNAL` | local main `13bfb8c` working tree                | workflow policy 10 pinned refs PASS; production audit 0; GitHub before-state captured           | 관리자 인증으로 main/tag ruleset와 npm environment policy 적용         |
+| 2026-09-03 | `OUT-M13`   | `DONE`     | local main `13bfb8c` working tree                | exact packed Prisma 5.22.0/6.19.3 + preserved 7.10.0 PostgreSQL consumers PASS                  | 원격 Node 22 CI lane 확인 후 release 선행 작업 계속                    |
 
 ### `OUT-M01` 종료 인계
 
@@ -913,4 +916,49 @@ Unverified paths and reason: 원격 GitHub Actions는 push 전이므로 미실�
 External PR, run, release evidence: 없음. local disposable compose project outbox-out-m10-20260903과 branch-local packed tarball로 검증했으며 commit/push/PR/release는 수행하지 않았다.
 Remaining risk: invariant upgrade는 기존 테이블을 검증하고 CHECK 재적용 동안 lock을 획득하므로 큰 production table은 maintenance window와 사전 corruption query가 필요하다. runtime fail-closed는 손상 row를 자동 수리하거나 격리하지 않으며 OUT-M19가 schema version/diagnostic 경로를 보강한다.
 Next exact action: diff를 review한 뒤 OUT-M10 파일만 commit/push/PR하고, 다음 최저 미완료 P1인 OUT-M11 forRootAsync DI와 option ownership을 진행한다.
+```
+
+### `OUT-M11` 종료 인계
+
+```text
+Task: OUT-M11
+State: DONE
+Start ref / end ref: local main@13bfb8ce3bdac8f1a01b507a5fd5749016131813 / local working tree (uncommitted)
+Changed files: async runtime/registration option types와 export, Nest provider graph wiring, module unit contracts, Nest 10 packed async DI consumer, README/CHANGELOG, maintenance plan
+Contract / semver decision: async factory와 OutboxOptionsFactory는 prisma/polling/retry/delivery/tenancy policy 등 runtime 값만 소유한다. transport, tenantProvider, isGlobal은 top-level OutboxAsyncOptions가 소유하며 provider class는 Nest가 imports graph로 생성한다. factory가 registration 값을 반환하면 compile-time never 또는 module compile 오류로 거부한다. public async option shape tightening과 tenantProvider 추가이므로 next pre-1.0 minor 대상으로 결정했다.
+Commands and exact results: focused module 1 suite/24 tests PASS; full unit 9 suites/174 tests PASS; lint PASS; build typecheck/build PASS; Nest 10.4.22 packed consumer에서 injected async factory/tenant provider/custom transport generate/typecheck/build/PostgreSQL smoke PASS; Nest 11.2.1 source unit/module contracts PASS; git diff --check PASS
+Unverified paths and reason: 원격 GitHub Actions의 Nest 10/11 matrix는 push 전이므로 미실행이다. 두 major의 실제 계약은 local Nest 11 source와 isolated Nest 10 packed runtime으로 검증했다.
+External PR, run, release evidence: 없음. commit/push/PR/release는 수행하지 않았다.
+Remaining risk: 이미 생성한 tenant provider value를 top-level에 전달하는 형태는 constructor injection을 다시 수행하지 않는다. injection이 필요하면 class를 전달해야 한다.
+Next exact action: 변경 review 후 commit/push/PR한다.
+```
+
+### `OUT-M12` 종료 인계
+
+```text
+Task: OUT-M12
+State: EXTERNAL
+Start ref / end ref: local main@13bfb8ce3bdac8f1a01b507a5fd5749016131813 / local working tree (uncommitted)
+Changed files: release tag/main ancestry authorization, manual dry-run-only path, npm/GitHub Release 권한 분리, immutable action SHA pins, repository-local workflow policy test, GitHub settings evidence report, package scripts, CHANGELOG, maintenance plan
+Contract / semver decision: 실제 npm publish는 matching v*.*.* tag push에서만 실행되고 tag commit은 origin/main ancestor여야 한다. workflow_dispatch는 contents-read dry-run만 실행한다. npm job은 contents read + OIDC, GitHub Release job은 contents write만 가진다. package runtime/API 변화가 없는 release hardening이다.
+Commands and exact results: npm run test:workflow-policy PASS(immutable action refs 10개); unit 174 PASS; coverage statements 94.53%, branches 88.47%, functions 98.63%, lines 95.55%; production npm audit 0; full audit 10 dev-only(high 7, moderate 1, low 2); GitHub public API before-state는 rulesets=[], npm environment protection_rules=[], can_admins_bypass=true, deployment_branch_policy=null; git diff --check PASS
+Unverified paths and reason: main/tag ruleset, required checks, force-push/tag 이동 차단, npm environment reviewer/deployment policy, npm Trusted Publisher 설정의 authenticated 확인은 GitHub 관리자 인증이 필요하다. 현재 gh token은 invalid라 변경하지 않았다. manual dry-run 원격 run도 push 전이라 미실행이다.
+External PR, run, release evidence: docs/reports/2026-09-03-out-m12-release-controls.md에 대상 repo/environment, read-only before-state, 정확한 관리자 후속 작업을 기록했다.
+Remaining risk: workflow ancestry 검증만으로 Git ref 이동을 막을 수 없다. ruleset과 environment protection이 적용되기 전에는 OUT-M12와 이를 선행으로 하는 OUT-M21/OUT-REL-01을 DONE으로 볼 수 없다.
+Next exact action: nestarc/outbox 관리자 자격으로 report의 before-state를 다시 캡처하고 main/tag ruleset과 npm environment policy를 적용한 뒤 API JSON/스크린샷과 manual dry-run run을 기록하고 OUT-M12를 DONE으로 바꾼다.
+```
+
+### `OUT-M13` 종료 인계
+
+```text
+Task: OUT-M13
+State: DONE
+Start ref / end ref: local main@13bfb8ce3bdac8f1a01b507a5fd5749016131813 / local working tree (uncommitted)
+Changed files: Node 22/Prisma 5.22.0 CI cell, shared Prisma 5/6 strict packed consumer fixture와 runner, release gates, package scripts, README compatibility evidence, CHANGELOG, maintenance plan
+Contract / semver decision: @prisma/client peer range ^5 || ^6 || ^7을 유지한다. exact 5.22.0과 6.19.3은 같은 prisma-client-js fixture에서 package root declarations와 shipped create-outbox-table.sql을 소비하고, 7.10.0은 preserved modern prisma-client/adapter fixture를 사용한다. peer range 변경이나 migration은 없다.
+Commands and exact results: exact Nest 10.4.22/Schedule 4.1.2/Prisma 5.22.0 strict install, generate, typecheck, build, PostgreSQL emit/poll/admin smoke PASS; 같은 fixture의 exact Prisma 6.19.3 PASS; preserved Nest 11.2.1/Schedule 5.0.1/Prisma 7.10.0 modern packed consumer PASS; source PostgreSQL E2E 1 suite/27 tests PASS; npm pack provenance/integrity assertions PASS
+Unverified paths and reason: 새 Node 22 CI cell의 원격 Actions run은 push 전이므로 미실행이다. local host Node는 repository baseline 환경을 사용했지만 exact dependency tuples와 packed runtime은 격리 설치했다.
+External PR, run, release evidence: 없음. disposable compose project outbox-out-m11-m13-20260903과 loopback-only DB에서 실행했다.
+Remaining risk: Prisma 5는 upstream maintenance 종료 가능성이 있으므로 다음 breaking support 결정은 OUT-M30 compatibility manifest 또는 별도 policy task에서 다룬다.
+Next exact action: 변경 review 후 commit/push/PR하고 원격 Node 22 matrix 결과를 확인한다.
 ```
