@@ -50,6 +50,7 @@ assert.equal(realPublishCommands.length, 1, 'exactly one real publish command');
 
 const verify = job('verify');
 const buildAndTest = job('build-and-test');
+const compatibilityNode24 = job('compatibility-node24');
 const manualDryRun = job('manual-dry-run');
 const publishNpm = job('publish-npm');
 const githubRelease = job('github-release');
@@ -57,6 +58,7 @@ const githubRelease = job('github-release');
 for (const [name, definition] of [
   ['verify', verify],
   ['build-and-test', buildAndTest],
+  ['compatibility-node24', compatibilityNode24],
   ['manual-dry-run', manualDryRun],
 ]) {
   assert.match(definition, /permissions:\n\s+contents: read/);
@@ -66,6 +68,20 @@ for (const [name, definition] of [
     assert.match(definition, /npm publish --access public --dry-run/);
   }
 }
+
+assert.match(buildAndTest, /node-version: '22'/);
+assert.match(buildAndTest, /npm run test:nest12-consumer/);
+assert.match(compatibilityNode24, /node-version: '24'/);
+assert.match(compatibilityNode24, /npm run test:nest12-consumer/);
+assert.doesNotMatch(workflow, /node-version: '20'/);
+assert.match(
+  manualDryRun,
+  /needs: \[verify, build-and-test, compatibility-node24\]/,
+);
+assert.match(
+  publishNpm,
+  /needs: \[verify, build-and-test, compatibility-node24\]/,
+);
 
 assert.match(publishNpm, /if: github\.event_name == 'push'/);
 assert.match(publishNpm, /permissions:\n\s+contents: read\n\s+id-token: write/);

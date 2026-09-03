@@ -36,18 +36,22 @@ Pass that configured client (or your Nest `PrismaService` wrapper) to `OutboxMod
 
 ### Compatibility evidence
 
-The declared Prisma floor is exercised as a packed package, not only against
-the repository's development dependencies:
+Node 22 is the minimum supported runtime. Node 22 and 24 are required controls;
+Node 20 reached upstream EOL and is not supported by the next pre-1.0 minor.
+The declared framework and Prisma ranges are exercised as packed packages, not
+only against the repository's development dependencies:
 
 | Node  | NestJS  | Schedule | Prisma | Automated evidence                                                                 |
 | ----- | ------- | -------- | ------ | ---------------------------------------------------------------------------------- |
 | 22    | 10.4.22 | 4.1.2    | 5.22.0 | generate, strict typecheck/build, SQL asset load, PostgreSQL emit/poll/admin smoke |
-| 20/22 | 10.4.22 | 4.1.2    | 6.19.3 | source E2E plus the same strict legacy packed PostgreSQL consumer                  |
-| 20/22 | 11.2.1  | 5.0.1    | 7.10.0 | source E2E plus strict packed PostgreSQL consumer                                  |
+| 22    | 10.4.22 | 4.1.2    | 6.19.3 | source E2E plus the same strict legacy packed PostgreSQL consumer                  |
+| 22/24 | 11.2.1  | 5.0.1    | 7.10.0 | source E2E; Node 22 also runs the strict packed PostgreSQL consumer                |
+| 22/24 | 12.0.1  | 12.0.1   | 7.10.0 | source E2E plus strict packed PostgreSQL consumer on both required Node controls   |
 
 All three Prisma majors consume the same package root declarations and shipped
-`src/sql` assets. Compatibility outside the declared peer ranges is not
-implied.
+`src/sql` assets. Node 26 is pre-LTS and runs only as an allowed-failure canary;
+passing that canary does not make it supported. Compatibility outside the
+declared peer ranges is not implied.
 
 ## Quick Start
 

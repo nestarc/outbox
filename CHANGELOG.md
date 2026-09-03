@@ -35,6 +35,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The minimum Node.js engine is now 22. Node 20 reached upstream EOL on
+  2026-03-24 and is removed in the next pre-1.0 minor rather than carried as a
+  legacy lane. Node 22 and 24 are required runtime controls; Node 26 remains an
+  allowed-failure pre-LTS canary.
+- NestJS 12 is now included in the `@nestjs/common` and `@nestjs/core` peer
+  ranges, paired with `@nestjs/schedule` 12. The exact NestJS 12.0.1 + Schedule
+  12.0.1 + Prisma 7.10.0 candidate passed strict packed type/module and
+  PostgreSQL consumer verification before the peer ranges were widened.
 - `forRootAsync()` now separates factory-owned runtime configuration from
   top-level Nest registrations. Custom transports and tenant provider classes
   are constructed by Nest with dependencies from `imports`; factory-returned
@@ -85,6 +93,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Testing
 
+- CI requires Node 22 and 24 controls, including exact NestJS 12.0.1 + Schedule
+  12.0.1 + Prisma 7.10.0 strict packed PostgreSQL consumers. Release
+  verification requires the same Node controls, while Node 26 is isolated in
+  a non-blocking canary until it reaches LTS.
 - CI and release verification now include Node 22 + NestJS 10.4.22 + Schedule
   4.1.2 + exact Prisma 5.22.0. The isolated strict consumer installs the packed
   tarball, generates the legacy Prisma client, typechecks public declarations,
@@ -121,6 +133,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   affect consumers, and the admin single-record mutation result changed from a
   boolean to a discriminated union, this change is targeted at the next
   pre-1.0 minor release rather than a patch release.
+- Raising the Node engine floor and removing Node 20 are also intentionally
+  targeted at that next pre-1.0 minor release. Node 20 consumers must move to
+  Node 22 or remain on the 0.2.x release line.
 
 ## [0.2.1] — 2026-08-30
 

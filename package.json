@@ -42,16 +42,19 @@
     "test:e2e": "npm run prisma:generate && jest --selectProjects e2e --runInBand",
     "test:all": "jest",
     "test:modern-consumer": "npm run build && node scripts/test-modern-consumer.js",
+    "test:nest12-consumer": "npm run build && node scripts/test-modern-consumer.js --nest12",
+    "test:nest12-candidate": "npm run build && node scripts/test-modern-consumer.js --nest12 --candidate-manifest",
     "test:prisma5-consumer": "npm run build && node scripts/test-prisma5-consumer.js",
     "test:prisma6-consumer": "npm run build && node scripts/test-prisma5-consumer.js --prisma6",
+    "test:compatibility-policy": "node scripts/test-compatibility-policy.js",
     "test:workflow-policy": "node scripts/test-workflow-policy.js",
     "prisma:generate": "node scripts/generate-prisma-client.js",
     "prepublishOnly": "npm run clean && npm run lint && npm run test && npm run build"
   },
   "peerDependencies": {
-    "@nestjs/common": "^10.0.0 || ^11.0.0",
-    "@nestjs/core": "^10.0.0 || ^11.0.0",
-    "@nestjs/schedule": "^4.0.0 || ^5.0.0",
+    "@nestjs/common": "^10.0.0 || ^11.0.0 || ^12.0.0",
+    "@nestjs/core": "^10.0.0 || ^11.0.0 || ^12.0.0",
+    "@nestjs/schedule": "^4.0.0 || ^5.0.0 || ^12.0.0",
     "@prisma/client": "^5.0.0 || ^6.0.0 || ^7.0.0",
     "reflect-metadata": "^0.1.13 || ^0.2.0",
     "pg": "^8.0.0"
@@ -88,7 +91,7 @@
     "typescript": "^5.4.5"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   },
   "publishConfig": {
     "access": "public"

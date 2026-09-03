@@ -5,11 +5,11 @@ name: Release
 #
 # Flow:
 #   1. verify job reads package.json version and confirms it matches the tag.
-#   2. build-and-test runs the prepublishOnly chain, the exact modern
-#      NestJS 11 / Prisma 7 PostgreSQL gates, then the preserved legacy
-#      NestJS 10 / Prisma 6 unit and PostgreSQL runtime lane.
-#   3. a tag-only npm job publishes through Trusted Publishing with OIDC.
-#   4. a separate tag-only job creates the GitHub Release with contents write.
+#   2. build-and-test runs the Node 22 prepublish chain and supported packed
+#      PostgreSQL consumers, including exact NestJS 12 / Schedule 12.
+#   3. compatibility-node24 repeats the NestJS 12 packed PostgreSQL control.
+#   4. a tag-only npm job publishes through Trusted Publishing with OIDC.
+#   5. a separate tag-only job creates the GitHub Release with contents write.
 #
 # Permissions:
 #   - publish-npm receives contents read + id-token write, never contents write.
@@ -59,7 +59,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
 
       - name: Read package version
@@ -137,11 +137,17 @@ jobs:
       - name: Clean + lint + unit test + build
         run: npm run prepublishOnly
 
+      - name: Compatibility policy
+        run: npm run test:compatibility-policy
+
       - name: Prisma 7.10.0 PostgreSQL E2E
         run: npm run test:e2e
 
       - name: Strict packed NestJS 11.2.1 + Prisma 7.10.0 consumer
         run: npm run test:modern-consumer
+
+      - name: Strict packed NestJS 12.0.1 + Schedule 12.0.1 + Prisma 7.10.0 consumer
+        run: npm run test:nest12-consumer
 
       - name: Strict packed NestJS 10.4.22 + Prisma 5.22.0 consumer
         run: npm run test:prisma5-consumer
@@ -180,10 +186,51 @@ jobs:
       - name: Pack (dry run)
         run: npm pack --dry-run
 
+  compatibility-node24:
+    name: Node 24 + NestJS 12 compatibility
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: outbox_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d outbox_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://test:test@localhost:5433/outbox_test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Node 24
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Strict packed NestJS 12.0.1 + Schedule 12.0.1 + Prisma 7.10.0 consumer
+        run: npm run test:nest12-consumer
+
   manual-dry-run:
     name: Manual npm publish dry-run
     if: github.event_name == 'workflow_dispatch'
-    needs: [verify, build-and-test]
+    needs: [verify, build-and-test, compatibility-node24]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -206,7 +253,7 @@ jobs:
   publish-npm:
     name: Publish to npm
     if: github.event_name == 'push'
-    needs: [verify, build-and-test]
+    needs: [verify, build-and-test, compatibility-node24]
     runs-on: ubuntu-latest
     environment: npm
     permissions:

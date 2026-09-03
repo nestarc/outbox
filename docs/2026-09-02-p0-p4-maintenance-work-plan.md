@@ -114,14 +114,14 @@ Next exact action:
 
 ### 1.3 선언과 자동 증거
 
-| 축         | 공개 선언                               | 현재 자동 증거                         | 유지보수 결론                                                                |
-| ---------- | --------------------------------------- | -------------------------------------- | ---------------------------------------------------------------------------- |
-| Node       | `>=20`                                  | CI Node 20/22, publish Node 24         | Node 20 EOL 이후 정책은 `OUT-M14`에서 결정한다.                              |
-| NestJS     | 10/11                                   | exact 10.4.22, 11.2.1                  | Nest 12는 peer 확대 전 strict packed PostgreSQL 증거가 필요하다.             |
-| Schedule   | 4/5                                     | Nest 10×Schedule 4, Nest 11×Schedule 5 | Nest 12와 함께 현재 조합을 재검증한다.                                       |
-| Prisma     | 5/6/7                                   | exact 5.22.0, 6.19.3, 7.10.0           | 세 major의 strict packed PostgreSQL consumer와 CI/release lane을 유지한다.   |
-| PostgreSQL | transactional SQL implementation        | PostgreSQL 16 CI/release               | 최소 지원 버전은 운영 문서에서 명시하고 migration 경로를 실제 DB로 검증한다. |
-| package    | CommonJS root + deep-resolved SQL files | legacy/modern packed consumers         | 명시적 `exports` 여부는 `OUT-M23`에서 ADR 후 결정한다.                       |
+| 축         | 공개 선언                               | 현재 자동 증거                        | 유지보수 결론                                                                |
+| ---------- | --------------------------------------- | ------------------------------------- | ---------------------------------------------------------------------------- |
+| Node       | `>=22`                                  | CI/release Node 22/24; Node 26 canary | Node 20은 EOL로 제거했고 22/24만 필수 지원한다 (`OUT-M14`).                  |
+| NestJS     | 10/11/12                                | exact 10.4.22, 11.2.1, 12.0.1         | Nest 12 strict packed PostgreSQL 증거를 Node 22/24에서 유지한다.             |
+| Schedule   | 4/5/12                                  | Nest 10×4, Nest 11×5, Nest 12×12      | exact Schedule 12.0.1을 Nest 12 control에 고정한다.                          |
+| Prisma     | 5/6/7                                   | exact 5.22.0, 6.19.3, 7.10.0          | 세 major의 strict packed PostgreSQL consumer와 CI/release lane을 유지한다.   |
+| PostgreSQL | transactional SQL implementation        | PostgreSQL 16 CI/release              | 최소 지원 버전은 운영 문서에서 명시하고 migration 경로를 실제 DB로 검증한다. |
+| package    | CommonJS root + deep-resolved SQL files | legacy/modern packed consumers        | 명시적 `exports` 여부는 `OUT-M23`에서 ADR 후 결정한다.                       |
 
 Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/nodejs/Release#release-schedule)을 기준으로 한다. 새 Nest/Prisma major는 “현재 최신”이라는 이유만으로 peer range에 먼저 추가하지 않는다.
 
@@ -183,7 +183,7 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 |   12 | `OUT-M11`      | P1       | `DONE`     | M    | 없음                                                                                 | `forRootAsync` DI와 async option 계약                               |
 |   13 | `OUT-M12`      | P1       | `EXTERNAL` | M    | GitHub repository/environment 관리자 인증                                            | release authorization, least privilege, immutable actions           |
 |   14 | `OUT-M13`      | P1       | `DONE`     | M    | 없음                                                                                 | Prisma 5 지원 선언 증거 복구                                        |
-|   15 | `OUT-M14`      | P1       | `DECISION` | M    | 없음                                                                                 | Node LTS/Nest 12 현재 지원 정책                                     |
+|   15 | `OUT-M14`      | P1       | `DONE`     | M    | 없음                                                                                 | Node LTS/Nest 12 현재 지원 정책                                     |
 |   16 | `OUT-M21`      | P1       | `BLOCKED`  | M    | `OUT-M12`                                                                            | pack-once, exact artifact publish/provenance                        |
 |   17 | `OUT-M15`      | P2       | `READY`    | S    | `OUT-M01`                                                                            | hook의 불변성·commit 의미 문서화                                    |
 |   18 | `OUT-M16`      | P2       | `READY`    | M    | 없음                                                                                 | envelope·JSON·bulk 입력 계약                                        |
@@ -226,7 +226,7 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 | `OUT-M11`  | dynamic module provider graph                             | constructor dependency가 필요한 tenant provider를 `forRootAsync`로 등록해 dependency가 `undefined`인 test를 만든다.                                        |
 | `OUT-M12`  | release workflow/settings                                 | manual dispatch 기본값으로 tag가 아닌 SHA가 실제 publish path에 들어가는 workflow fixture를 만든다.                                                        |
 | `OUT-M13`  | CI/release matrix, consumer                               | exact Prisma 5.22 packed PostgreSQL consumer를 추가해 첫 install/type/runtime 실패를 기록한다.                                                             |
-| `OUT-M14`  | engines/peers/matrix/README                               | Node 22/24 × exact Nest 12/Schedule 6 또는 현재 호환 조합의 strict consumer 결과를 ADR 입력으로 기록한다.                                                  |
+| `OUT-M14`  | engines/peers/matrix/README                               | Node 22/24 × exact Nest 12.0.1/Schedule 12.0.1 strict consumer 결과를 ADR에 기록했다.                                                                      |
 | `OUT-M15`  | hooks docs/tests                                          | caller-owned transaction rollback인데 `onEmit`이 이미 호출되는 test와 observer mutation isolation test를 고정한다.                                         |
 | `OUT-M16`  | emitter/record validation, bulk SQL                       | circular/BigInt가 native JSON 오류로 새고 Invalid Date가 `null`이 되는 현상, oversized metadata와 bind-limit 초과를 stable package error table로 고정한다. |
 | `OUT-M17`  | SQL comments, README, admin cursor                        | 동일 `created_at` row 여러 개에서 date-only pagination이 누락/중복되는 test를 만든다.                                                                      |
@@ -484,16 +484,16 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 
 ### `OUT-M14` — Node LTS와 Nest 12 지원 정책
 
-- 상태: `P1 / DECISION`
+- 상태: `P1 / DONE`
 
 완료 조건:
 
-- [ ] Node 20 EOL 이후 지원 종료/legacy quarantine/다음 major 제거 중 하나를 ADR로 정한다.
-- [ ] Node 22/24를 필수 control/runtime lane으로 검증한다.
-- [ ] 현재 peer range로 strict install이 먼저 실패하는 것도 증거로 남기고, 임시 candidate manifest에서 exact Nest 12 + 해당 Schedule major + Prisma 대표 버전 type/module/PostgreSQL consumer를 실행한 뒤 최종 peer 결정을 채택한다.
-- [ ] proof 전에는 peer range를 넓히지 않는다.
-- [ ] engines/peers/README/CI/release가 같은 표를 사용한다.
-- [ ] Node 26은 LTS 전 allowed-failure canary 이상으로 선언하지 않는다.
+- [x] Node 20 EOL 이후 지원 종료/legacy quarantine/다음 major 제거 중 하나를 ADR로 정한다.
+- [x] Node 22/24를 필수 control/runtime lane으로 검증한다.
+- [x] 현재 peer range로 strict install이 먼저 실패하는 것도 증거로 남기고, 임시 candidate manifest에서 exact Nest 12 + 해당 Schedule major + Prisma 대표 버전 type/module/PostgreSQL consumer를 실행한 뒤 최종 peer 결정을 채택한다.
+- [x] proof 전에는 peer range를 넓히지 않는다.
+- [x] engines/peers/README/CI/release가 같은 표를 사용한다.
+- [x] Node 26은 LTS 전 allowed-failure canary 이상으로 선언하지 않는다.
 
 검증: 프로필 A/B/D/E.
 
@@ -752,6 +752,7 @@ Outbox ── durable record / publisher callback ──> Jobs adapter ──> J
 | 2026-09-03 | `OUT-M11`   | `DONE`     | local main `13bfb8c` working tree                | unit 174; Nest 11 source + Nest 10 packed async DI; lint/typecheck/build PASS                   | 변경 review 후 commit/push/PR                                          |
 | 2026-09-03 | `OUT-M12`   | `EXTERNAL` | local main `13bfb8c` working tree                | workflow policy 10 pinned refs PASS; production audit 0; GitHub before-state captured           | 관리자 인증으로 main/tag ruleset와 npm environment policy 적용         |
 | 2026-09-03 | `OUT-M13`   | `DONE`     | local main `13bfb8c` working tree                | exact packed Prisma 5.22.0/6.19.3 + preserved 7.10.0 PostgreSQL consumers PASS                  | 원격 Node 22 CI lane 확인 후 release 선행 작업 계속                    |
+| 2026-09-03 | `OUT-M14`   | `DONE`     | local main `5a032e3` working tree                | Node 22/24 exact Nest 12/Schedule 12 packed PostgreSQL consumers; unit/E2E/policy/audit PASS    | 변경 review 후 commit/push/PR하고 원격 Node 22/24 matrix 확인          |
 
 ### `OUT-M01` 종료 인계
 
@@ -961,4 +962,19 @@ Unverified paths and reason: 새 Node 22 CI cell의 원격 Actions run은 push �
 External PR, run, release evidence: 없음. disposable compose project outbox-out-m11-m13-20260903과 loopback-only DB에서 실행했다.
 Remaining risk: Prisma 5는 upstream maintenance 종료 가능성이 있으므로 다음 breaking support 결정은 OUT-M30 compatibility manifest 또는 별도 policy task에서 다룬다.
 Next exact action: 변경 review 후 commit/push/PR하고 원격 Node 22 matrix 결과를 확인한다.
+```
+
+### `OUT-M14` 종료 인계
+
+```text
+Task: OUT-M14
+State: DONE
+Start ref / end ref: local main@5a032e3 / local main@5a032e3 working tree (uncommitted)
+Changed files: engines/Nest/Schedule peers와 lock metadata, Node 22/24 CI·release lanes와 Node 26 canary, exact Nest 12 packed-consumer runner와 compatibility policy, README/CHANGELOG, ADR 0007, maintenance plan
+Contract / semver decision: Node 20은 2026-03-24 EOL이므로 legacy lane 없이 지원 종료하고 engines를 >=22로 올린다. Node 22/24만 필수 control/runtime이며 Node 26은 LTS 전 allowed-failure CI canary다. exact Nest 12.0.1 + Schedule 12.0.1 + Prisma 7.10.0 proof 뒤 Nest common/core ^12와 Schedule ^12 peer를 추가한다. Node floor 제거는 breaking support change이므로 next pre-1.0 minor(기본 0.3.0) 대상으로 결정했다.
+Commands and exact results: 현재 peer의 첫 strict install은 @nestjs/common ^10 || ^11 충돌로 ERESOLVE; 임시 candidate Node 24 strict install/generate/typecheck/build/PostgreSQL smoke PASS (sha512-BdmqpZoTfeL2lRyGiac66mvxdMKKSZX4WyJ0EyrAdvRRh0Fr6bqOoIvkSAkBrIfGrwz9K3fawlNQFoj/9bjGvQ==); 최종 manifest는 Node 22와 24에서 exact Nest 12.0.1/Schedule 12.0.1/Prisma 7.10.0/@types-node 22.20.1 strict packed smoke PASS, 동일 tarball sha512-yDyKkI6p2p/SbTy5DZiHIGRykxe1lPNbfFgfCY28vHN1M3x4wNsLRS9E8jyQY/7XF6NkrpNZSsyDSVBLRawomw==; 기존 Nest 11.2.1 packed consumer PASS; unit 9 suites/174 tests PASS; PostgreSQL E2E 1 suite/27 tests PASS; coverage statements 94.53%, branches 88.47%, functions 98.63%, lines 95.55%; lint/typecheck/build PASS; compatibility policy PASS; release workflow policy 12 immutable refs PASS; isolated-cache npm pack dry-run 117 files/55.7 kB PASS (기본 ~/.npm cache 시도는 기존 root-owned cache로 EPERM); production audit 0; full audit 10 dev-only(high 7, moderate 1, low 2)
+Unverified paths and reason: 원격 GitHub Actions의 Node 22/24 matrix와 Node 26 allowed-failure canary는 push 전이라 미실행이다. 로컬 Node 24와 격리 Node 22 container에서 동일 packed artifact를 실제 PostgreSQL 16으로 검증했다.
+External PR, run, release evidence: Node 공식 release/EOL 표와 npm의 current NestJS/Schedule manifest를 ADR 0007에 연결했다. commit/push/PR/release는 수행하지 않았다.
+Remaining risk: peer range의 모든 조합을 전수 증명하지는 않으며 exact control tuples가 회귀 증거다. Node 26 canary 성공은 지원 선언이 아니고 LTS 승격 뒤 별도 정책 결정이 필요하다.
+Next exact action: diff를 review한 뒤 OUT-M14 파일만 commit/push/PR하고 원격 Node 22/24 필수 matrix와 Node 26 allowed-failure canary 결과를 확인한다.
 ```
