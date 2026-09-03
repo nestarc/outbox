@@ -156,11 +156,13 @@ For an existing 0.1.x install, apply the additive upgrade file:
 psql "$DATABASE_URL" -f "$(node -e "console.log(require.resolve('@nestarc/outbox/src/sql/upgrade-0.1-to-0.2.sql'))")"
 ```
 
-Existing 0.2.x installations must also apply the idempotent claim-fencing
-upgrade before running a version that uses claim tokens:
+Existing 0.2.x installations must drain their old pollers, apply both
+idempotent ownership upgrades, and then start the lease-aware runtime. Old
+0.2.x pollers do not heartbeat active claims.
 
 ```bash
 psql "$DATABASE_URL" -f "$(node -e "console.log(require.resolve('@nestarc/outbox/src/sql/upgrade-add-claim-token.sql'))")"
+psql "$DATABASE_URL" -f "$(node -e "console.log(require.resolve('@nestarc/outbox/src/sql/upgrade-add-lease.sql'))")"
 ```
 
 <details>
@@ -188,6 +190,7 @@ CREATE TABLE IF NOT EXISTS outbox_events (
   headers       JSONB NOT NULL DEFAULT '{}'::jsonb,
   occurred_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   claim_token   UUID,
+  lease_expires_at TIMESTAMPTZ,
 
   CONSTRAINT chk_status CHECK (status IN ('PENDING', 'PROCESSING', 'SENT', 'FAILED'))
 );
@@ -204,6 +207,10 @@ CREATE INDEX IF NOT EXISTS idx_outbox_processing
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_outbox_processing_claim_token
   ON outbox_events (claim_token)
+  WHERE status = 'PROCESSING';
+
+CREATE INDEX IF NOT EXISTS idx_outbox_processing_lease_expiry
+  ON outbox_events (lease_expires_at ASC)
   WHERE status = 'PROCESSING';
 
 -- FAILED events: admin/monitoring queries
@@ -226,24 +233,27 @@ CREATE INDEX IF NOT EXISTS idx_outbox_tenant_pending
 
 All options passed to `OutboxModule.forRoot()` or the factory returned by `OutboxModule.forRootAsync()`.
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `prisma` | class ref / instance | **required** | `PrismaService` class reference (`forRoot`, must be `@Global`) or instance (`forRootAsync`). See `PrismaLike` type for minimum interface. |
-| `polling.enabled` | `boolean` | `true` | Enable or disable the polling scheduler |
-| `polling.interval` | `number` | `5000` | Milliseconds between polling cycles |
-| `polling.batchSize` | `number` | `100` | Maximum events processed per polling cycle |
-| `retry.maxRetries` | `number` | `5` | Maximum delivery attempts before marking an event `FAILED` |
-| `retry.backoff` | `'fixed' \| 'exponential'` | `'exponential'` | Backoff strategy between retries |
-| `retry.initialDelay` | `number` | `1000` | Initial delay in ms (base for exponential, constant for fixed) |
-| `delivery.mode` | `'local' \| 'publisher'` | `'local'` | `local` requires registered `@OnOutboxEvent()` handlers; `publisher` sends records to a broker-style transport without requiring local handlers. |
-| `transport` | `Type` | `LocalTransport` | Custom transport class implementing `OutboxTransport` or `OutboxPublisher`. |
-| `tenancy.provider` | `OutboxTenantProvider` / `Type` | none | Optional tenant provider. `emit()` uses explicit `tenantId` first, then `provider.getTenantId()`. `LocalTransport` restores context with `provider.runWithTenant()` when available. |
-| `hooks` | `OutboxHooks` | none | Optional lifecycle callbacks for emit, poll, dispatch success/failure, retry, and dead-letter metrics/tracing. Hook failures are logged and swallowed. |
-| `wakeup.enabled` | `boolean` | `false` | Enable PostgreSQL `LISTEN/NOTIFY` wakeup in addition to polling. Requires `pg` or a custom `clientFactory`. |
-| `wakeup.channel` | `string` | `'outbox_events'` | PostgreSQL notification channel. |
-| `wakeup.connectionString` | `string` | `pg` default | Connection string used by the notification client when `pg` is installed. |
-| `isGlobal` | `boolean` | `true` | Register the module globally so `OutboxEmitter` is available everywhere |
-| `stuckThreshold` | `number` | `300000` | Events stuck in `PROCESSING` longer than this (ms) are reset to `PENDING` |
+| Option                            | Type                            | Default                      | Description                                                                                                                                                                         |
+| --------------------------------- | ------------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `prisma`                          | class ref / instance            | **required**                 | `PrismaService` class reference (`forRoot`, must be `@Global`) or instance (`forRootAsync`). See `PrismaLike` type for minimum interface.                                           |
+| `polling.enabled`                 | `boolean`                       | `true`                       | Enable or disable the polling scheduler                                                                                                                                             |
+| `polling.interval`                | `number`                        | `5000`                       | Milliseconds between polling cycles                                                                                                                                                 |
+| `polling.batchSize`               | `number`                        | `100`                        | Maximum events processed per polling cycle                                                                                                                                          |
+| `retry.maxRetries`                | `number`                        | `5`                          | Maximum delivery attempts before marking an event `FAILED`                                                                                                                          |
+| `retry.backoff`                   | `'fixed' \| 'exponential'`      | `'exponential'`              | Backoff strategy between retries                                                                                                                                                    |
+| `retry.initialDelay`              | `number`                        | `1000`                       | Initial delay in ms (base for exponential, constant for fixed)                                                                                                                      |
+| `delivery.mode`                   | `'local' \| 'publisher'`        | `'local'`                    | `local` requires registered `@OnOutboxEvent()` handlers; `publisher` sends records to a broker-style transport without requiring local handlers.                                    |
+| `transport`                       | `Type`                          | `LocalTransport`             | Custom transport class implementing `OutboxTransport` or `OutboxPublisher`.                                                                                                         |
+| `tenancy.provider`                | `OutboxTenantProvider` / `Type` | none                         | Optional tenant provider. `emit()` uses explicit `tenantId` first, then `provider.getTenantId()`. `LocalTransport` restores context with `provider.runWithTenant()` when available. |
+| `hooks`                           | `OutboxHooks`                   | none                         | Optional lifecycle callbacks for emit, poll, dispatch success/failure, retry, and dead-letter metrics/tracing. Hook failures are logged and swallowed.                              |
+| `wakeup.enabled`                  | `boolean`                       | `false`                      | Enable PostgreSQL `LISTEN/NOTIFY` wakeup in addition to polling. Requires `pg` or a custom `clientFactory`.                                                                         |
+| `wakeup.channel`                  | `string`                        | `'outbox_events'`            | PostgreSQL notification channel.                                                                                                                                                    |
+| `wakeup.connectionString`         | `string`                        | `pg` default                 | Connection string used by the notification client when `pg` is installed.                                                                                                           |
+| `lease.duration`                  | `number`                        | `stuckThreshold` or `300000` | Claim lifetime in ms. Active callbacks renew the lease; expired claims are eligible for recovery.                                                                                   |
+| `lease.heartbeatInterval`         | `number`                        | `lease.duration / 3`         | Heartbeat interval in ms. Must be positive and less than half of `lease.duration`.                                                                                                  |
+| `lease.heartbeatFailureTolerance` | `number`                        | `1`                          | Consecutive heartbeat errors tolerated before the claimant abandons completion and lets the lease expire.                                                                           |
+| `isGlobal`                        | `boolean`                       | `true`                       | Register the module globally so `OutboxEmitter` is available everywhere                                                                                                             |
+| `stuckThreshold`                  | `number`                        | `300000`                     | Deprecated compatibility alias for `lease.duration`; ignored when `lease.duration` is set.                                                                                          |
 
 ### Async registration
 
@@ -257,7 +267,7 @@ OutboxModule.forRootAsync({
     polling: { interval: config.get('OUTBOX_POLL_INTERVAL') },
   }),
   inject: [ConfigService, PrismaService],
-})
+});
 ```
 
 ## Event Metadata
@@ -282,7 +292,10 @@ await outbox.emit(tx, new OrderCreatedEvent(order.id, total), {
 
 ```typescript
 await outbox.emitMany(tx, [
-  { event: new OrderCreatedEvent(order.id, total), options: { aggregateId: order.id } },
+  {
+    event: new OrderCreatedEvent(order.id, total),
+    options: { aggregateId: order.id },
+  },
   { event: new OrderPaidEvent(order.id), options: { aggregateId: order.id } },
 ]);
 ```
@@ -402,22 +415,24 @@ With the defaults (`initialDelay: 1000`, `maxRetries: 5`), the event is attempte
 
 ## Multi-Instance Safety
 
-When multiple application instances run against the same database (horizontal scaling, rolling deployments), each polling cycle uses `SELECT ... FOR UPDATE SKIP LOCKED` inside a transaction.
+When multiple application instances run against the same database (horizontal scaling, rolling deployments), each record is claimed on demand using `SELECT ... FOR UPDATE SKIP LOCKED`, a private claim token, and an expiring lease.
 
-- The first instance to acquire a row locks it and processes it.
-- Other instances skip locked rows and move on.
-- No event is ever processed twice concurrently.
-- No external coordinator (Redis, Zookeeper, etc.) is required.
+- A poller claims only the next record immediately before starting its callback. It does not hold a batch of unstarted claims.
+- The active callback renews its lease. Recovery only returns an expired `PROCESSING` lease to `PENDING`, without spending retry budget.
+- Every completion compares the event id, `PROCESSING` state, claim token, and unexpired lease. A stale callback cannot write `SENT`, retry, or `FAILED` over a newer claimant.
+
+Delivery remains **at least once**, not exactly once. If heartbeat access is lost, the old callback cannot be forcibly cancelled: its eventual database completion is discarded, but external side effects that occurred before lease loss may overlap with a later retry. Publisher and handler side effects must therefore be idempotent, normally using `record.id` or an application-defined stable key.
 
 ## Graceful Shutdown
 
 When the NestJS application receives a shutdown signal:
 
 1. The polling scheduler stops accepting new cycles.
-2. Any in-flight poll (including active DB queries) is allowed to complete.
-3. Only then does the process exit.
+2. A claim returned by an in-flight query after shutdown begins is released to `PENDING` with its original claim token and is never dispatched.
+3. An active callback keeps its heartbeat and is allowed to complete until the shutdown timeout.
+4. Only then does the process exit.
 
-This prevents an event from being left permanently in the `PROCESSING` status due to an abrupt shutdown. Events that do get stuck (e.g. a SIGKILL) are recovered automatically on the next startup via the `stuckThreshold` mechanism.
+After a process crash or event-loop failure stops heartbeats, the claim becomes recoverable when `lease_expires_at` passes. Recovery runs every tenth poll cycle and does not increment `retry_count`. A callback that hangs while its event loop and database heartbeat remain healthy cannot be distinguished from legitimate long work; use an application-level timeout and terminate the unhealthy process so its lease can expire.
 
 ## Custom Transport
 
@@ -454,16 +469,16 @@ OutboxModule.forRoot({
   prisma: PrismaService,
   delivery: { mode: 'publisher' },
   transport: KafkaTransport,
-})
+});
 ```
 
 Legacy custom transports that implement `dispatch(record, handlers)` can also run in publisher mode. In that case the poller calls `dispatch(record, [])`, so broker transports should not depend on local handlers.
 
 ## Ecosystem
 
-| Package | Description |
-|---|---|
-| [`@nestarc/tenancy`](https://www.npmjs.com/package/@nestarc/tenancy) | Multi-tenancy for NestJS and Prisma — row-level isolation with zero boilerplate |
+| Package                                                                      | Description                                                                           |
+| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| [`@nestarc/tenancy`](https://www.npmjs.com/package/@nestarc/tenancy)         | Multi-tenancy for NestJS and Prisma — row-level isolation with zero boilerplate       |
 | [`@nestarc/idempotency`](https://www.npmjs.com/package/@nestarc/idempotency) | Idempotent request handling for NestJS — deduplicate API calls at the decorator level |
 
 The `outbox_events` table includes `tenant_id`, aggregate metadata, idempotency keys, correlation ids, and headers so `@nestarc/tenancy`, `@nestarc/idempotency`, broker transports, and internal admin tools can share the same reliability layer.

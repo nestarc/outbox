@@ -33,6 +33,7 @@ export type {
   OutboxPollingOptions,
   OutboxRetryOptions,
   OutboxDeliveryOptions,
+  OutboxLeaseOptions,
 } from './interfaces/outbox-options.interface';
 export type {
   OutboxEmitManyEntry,

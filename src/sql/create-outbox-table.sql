@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS outbox_events (
   headers       JSONB NOT NULL DEFAULT '{}'::jsonb,
   occurred_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   claim_token   UUID,
+  lease_expires_at TIMESTAMPTZ,
 
   CONSTRAINT chk_status CHECK (status IN ('PENDING', 'PROCESSING', 'SENT', 'FAILED'))
 );
@@ -36,6 +37,11 @@ CREATE INDEX IF NOT EXISTS idx_outbox_processing
 -- Active claim fencing: a token belongs to at most one PROCESSING row
 CREATE UNIQUE INDEX IF NOT EXISTS idx_outbox_processing_claim_token
   ON outbox_events (claim_token)
+  WHERE status = 'PROCESSING';
+
+-- Expired claims: lease recovery scans only PROCESSING rows
+CREATE INDEX IF NOT EXISTS idx_outbox_processing_lease_expiry
+  ON outbox_events (lease_expires_at ASC)
   WHERE status = 'PROCESSING';
 
 -- FAILED events: admin/monitoring queries

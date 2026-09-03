@@ -9,6 +9,7 @@ import { SchedulerRegistry } from '@nestjs/schedule';
 import {
   DEFAULT_BACKOFF,
   DEFAULT_BATCH_SIZE,
+  DEFAULT_HEARTBEAT_FAILURE_TOLERANCE,
   DEFAULT_INITIAL_DELAY,
   DEFAULT_POLLING_INTERVAL,
   DEFAULT_SHUTDOWN_TIMEOUT,
@@ -35,7 +36,11 @@ interface ClaimedOutboxRecord extends OutboxRecord {
   readonly claimToken: string;
 }
 
-type DispatchResult = 'dispatched' | 'terminal' | 'lost-claim';
+interface LeaseHeartbeat {
+  stop(): Promise<boolean>;
+}
+
+type DispatchResult = 'dispatched' | 'no-handler' | 'lost-claim';
 type FailureTransition = 'retry' | 'dead-letter' | 'lost-claim';
 
 function hasPublish(transport: unknown): transport is OutboxPublisher {
@@ -69,7 +74,9 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
   private readonly batchSize: number;
   private readonly backoff: 'fixed' | 'exponential';
   private readonly initialDelay: number;
-  private readonly stuckThreshold: number;
+  private readonly leaseDuration: number;
+  private readonly heartbeatInterval: number;
+  private readonly heartbeatFailureTolerance: number;
   private readonly deliveryMode: 'local' | 'publisher';
 
   constructor(
@@ -84,8 +91,18 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
     this.batchSize = options.polling?.batchSize ?? DEFAULT_BATCH_SIZE;
     this.backoff = options.retry?.backoff ?? DEFAULT_BACKOFF;
     this.initialDelay = options.retry?.initialDelay ?? DEFAULT_INITIAL_DELAY;
-    this.stuckThreshold = options.stuckThreshold ?? DEFAULT_STUCK_THRESHOLD;
+    this.leaseDuration =
+      options.lease?.duration ??
+      options.stuckThreshold ??
+      DEFAULT_STUCK_THRESHOLD;
+    this.heartbeatInterval =
+      options.lease?.heartbeatInterval ??
+      Math.max(1, Math.floor(this.leaseDuration / 3));
+    this.heartbeatFailureTolerance =
+      options.lease?.heartbeatFailureTolerance ??
+      DEFAULT_HEARTBEAT_FAILURE_TOLERANCE;
     this.deliveryMode = options.delivery?.mode ?? 'local';
+    this.validateLeaseOptions();
   }
 
   onModuleInit(): void {
@@ -209,53 +226,103 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
         deliveryMode: this.deliveryMode,
       });
 
-      const records = await this.fetchAndLock();
+      for (let processed = 0; processed < this.batchSize; processed++) {
+        const [record] = await this.fetchAndLock();
+        if (!record) break;
 
-      for (const record of records) {
-        if (this.isShuttingDown) break;
-
-        this.activeCount++;
-        const startedAt = Date.now();
-        try {
-          await this.runHook(
-            'onDispatchStart',
-            this.createDispatchContext(record),
-          );
-          const dispatched = await this.dispatchRecord(record);
-          if (dispatched === 'dispatched' && (await this.markSent(record))) {
-            await this.runHook('onDispatchSuccess', {
-              ...this.createDispatchContext(record),
-              durationMs: Date.now() - startedAt,
-            });
-          }
-        } catch (error) {
-          const err = error instanceof Error ? error : new Error(String(error));
-          const transition = await this.handleFailure(record, err);
-          if (transition !== 'lost-claim') {
-            await this.runHook('onDispatchFailure', {
-              ...this.createDispatchContext(record),
-              error: err,
-              durationMs: Date.now() - startedAt,
-            });
-            const retryContext = this.createRetryContext(
-              record,
-              err,
-              record.retryCount + 1,
-            );
-            await this.runHook(
-              transition === 'dead-letter'
-                ? 'onDeadLetter'
-                : 'onRetryScheduled',
-              retryContext,
-            );
-          }
-        } finally {
-          this.activeCount--;
+        if (this.isShuttingDown) {
+          await this.releaseClaim(record);
+          break;
         }
+
+        await this.processRecord(record);
       }
     } finally {
       this.pollInFlight--;
     }
+  }
+
+  private async processRecord(record: ClaimedOutboxRecord): Promise<void> {
+    this.activeCount++;
+    const startedAt = Date.now();
+    const heartbeat = this.startLeaseHeartbeat(record);
+    try {
+      let dispatchResult: DispatchResult;
+      let dispatchError: Error | null = null;
+      try {
+        await this.runHook(
+          'onDispatchStart',
+          this.createDispatchContext(record),
+        );
+        dispatchResult = await this.dispatchRecord(record);
+      } catch (error) {
+        dispatchResult = 'lost-claim';
+        dispatchError =
+          error instanceof Error ? error : new Error(String(error));
+      }
+
+      const leaseHealthy = await heartbeat.stop();
+      if (!leaseHealthy) {
+        this.logger.warn(
+          `Lost lease for event ${record.id}; completion was discarded`,
+        );
+        return;
+      }
+
+      if (dispatchError) {
+        await this.transitionFailure(record, dispatchError, startedAt);
+        return;
+      }
+
+      if (dispatchResult === 'no-handler') {
+        const errorMessage = `No registered handlers for event type "${record.eventType}"`;
+        const transitioned = await this.markFailed(record, errorMessage);
+        if (transitioned) {
+          this.logger.error(
+            `No handlers for event type "${record.eventType}", marked as FAILED`,
+          );
+        } else {
+          this.logger.warn(
+            `Lost claim for event ${record.id} before marking it as FAILED`,
+          );
+        }
+        return;
+      }
+
+      if (dispatchResult === 'dispatched' && (await this.markSent(record))) {
+        await this.runHook('onDispatchSuccess', {
+          ...this.createDispatchContext(record),
+          durationMs: Date.now() - startedAt,
+        });
+      }
+    } finally {
+      await heartbeat.stop();
+      this.activeCount--;
+    }
+  }
+
+  private async transitionFailure(
+    record: ClaimedOutboxRecord,
+    error: Error,
+    startedAt: number,
+  ): Promise<void> {
+    const transition = await this.handleFailure(record, error);
+    if (transition === 'lost-claim') return;
+
+    await this.runHook('onDispatchFailure', {
+      ...this.createDispatchContext(record),
+      error,
+      durationMs: Date.now() - startedAt,
+    });
+    const retryContext = this.createRetryContext(
+      record,
+      error,
+      record.retryCount + 1,
+    );
+    await this.runHook(
+      transition === 'dead-letter' ? 'onDeadLetter' : 'onRetryScheduled',
+      retryContext,
+    );
   }
 
   private async dispatchRecord(
@@ -280,18 +347,7 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
     const handlers = this.explorer.getHandlers(record.eventType);
 
     if (handlers.length === 0) {
-      const errorMessage = `No registered handlers for event type "${record.eventType}"`;
-      const transitioned = await this.markFailed(record, errorMessage);
-      if (transitioned) {
-        this.logger.error(
-          `No handlers for event type "${record.eventType}", marked as FAILED`,
-        );
-      } else {
-        this.logger.warn(
-          `Lost claim for event ${record.id} before marking it as FAILED`,
-        );
-      }
-      return transitioned ? 'terminal' : 'lost-claim';
+      return 'no-handler';
     }
 
     if (!hasDispatch(this.transport)) {
@@ -314,12 +370,13 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
     const prisma = this.options.prisma;
     const backoffType = this.backoff;
     const initialDelaySeconds = this.initialDelay / 1000;
-    const batchSize = this.batchSize;
+    const leaseDurationSeconds = this.leaseDuration / 1000;
 
     return prisma.$queryRaw`
       UPDATE outbox_events
       SET status = 'PROCESSING',
           claim_token = gen_random_uuid(),
+          lease_expires_at = NOW() + make_interval(secs => ${leaseDurationSeconds}),
           updated_at = NOW()
       WHERE id IN (
         SELECT id FROM outbox_events
@@ -335,7 +392,7 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
             )
           )
         ORDER BY created_at ASC
-        LIMIT ${batchSize}
+        LIMIT 1
         FOR UPDATE SKIP LOCKED
       )
       RETURNING
@@ -358,7 +415,8 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
         causation_id AS "causationId",
         headers,
         occurred_at AS "occurredAt",
-        claim_token AS "claimToken"
+        claim_token AS "claimToken",
+        lease_expires_at AS "leaseExpiresAt"
     `;
   }
 
@@ -368,11 +426,13 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
       UPDATE outbox_events
       SET status = 'SENT',
           claim_token = NULL,
+          lease_expires_at = NULL,
           processed_at = NOW(),
           updated_at = NOW()
       WHERE id = ${record.id}::uuid
         AND status = 'PROCESSING'
         AND claim_token = ${record.claimToken}::uuid
+        AND lease_expires_at > NOW()
     `;
     if (updated === 0) {
       this.logger.warn(
@@ -391,11 +451,13 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
       UPDATE outbox_events
       SET status = 'FAILED',
           claim_token = NULL,
+          lease_expires_at = NULL,
           last_error = ${errorMessage},
           updated_at = NOW()
       WHERE id = ${record.id}::uuid
         AND status = 'PROCESSING'
         AND claim_token = ${record.claimToken}::uuid
+        AND lease_expires_at > NOW()
     `;
     return updated === 1;
   }
@@ -413,12 +475,14 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
         UPDATE outbox_events
         SET status = 'FAILED',
             claim_token = NULL,
+            lease_expires_at = NULL,
             retry_count = ${newRetryCount},
             last_error = ${errorMessage},
             updated_at = NOW()
         WHERE id = ${record.id}::uuid
           AND status = 'PROCESSING'
           AND claim_token = ${record.claimToken}::uuid
+          AND lease_expires_at > NOW()
       `;
       if (updated === 0) {
         this.logger.warn(
@@ -435,12 +499,14 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
         UPDATE outbox_events
         SET status = 'PENDING',
             claim_token = NULL,
+            lease_expires_at = NULL,
             retry_count = ${newRetryCount},
             last_error = ${errorMessage},
             updated_at = NOW()
         WHERE id = ${record.id}::uuid
           AND status = 'PROCESSING'
           AND claim_token = ${record.claimToken}::uuid
+          AND lease_expires_at > NOW()
       `;
       if (updated === 0) {
         this.logger.warn(
@@ -455,20 +521,134 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
     }
   }
 
+  private startLeaseHeartbeat(record: ClaimedOutboxRecord): LeaseHeartbeat {
+    let stopped = false;
+    let healthy = true;
+    let consecutiveFailures = 0;
+    let inFlight: Promise<void> | null = null;
+
+    const heartbeat = async (): Promise<void> => {
+      try {
+        const renewed = await this.renewLease(record);
+        if (!renewed) {
+          healthy = false;
+          this.logger.warn(`Lost lease heartbeat claim for event ${record.id}`);
+          return;
+        }
+        consecutiveFailures = 0;
+      } catch (error) {
+        consecutiveFailures++;
+        const err = error instanceof Error ? error : new Error(String(error));
+        this.logger.warn(
+          `Lease heartbeat failed for event ${record.id} ` +
+            `(${consecutiveFailures}/${this.heartbeatFailureTolerance + 1}): ${err.message}`,
+        );
+        if (consecutiveFailures > this.heartbeatFailureTolerance) {
+          healthy = false;
+        }
+      }
+    };
+
+    const interval = setInterval(() => {
+      if (stopped || !healthy || inFlight) return;
+      inFlight = heartbeat().finally(() => {
+        inFlight = null;
+      });
+    }, this.heartbeatInterval);
+    interval.unref?.();
+
+    return {
+      stop: async (): Promise<boolean> => {
+        if (!stopped) {
+          stopped = true;
+          clearInterval(interval);
+        }
+        if (inFlight) await inFlight;
+        return healthy;
+      },
+    };
+  }
+
+  private async renewLease(record: ClaimedOutboxRecord): Promise<boolean> {
+    const prisma = this.options.prisma;
+    const leaseDurationSeconds = this.leaseDuration / 1000;
+    const updated = await prisma.$executeRaw`
+      UPDATE outbox_events
+      SET lease_expires_at = NOW() + make_interval(secs => ${leaseDurationSeconds}),
+          updated_at = NOW()
+      WHERE id = ${record.id}::uuid
+        AND status = 'PROCESSING'
+        AND claim_token = ${record.claimToken}::uuid
+        AND lease_expires_at > NOW()
+    `;
+    return updated === 1;
+  }
+
+  private async releaseClaim(record: ClaimedOutboxRecord): Promise<void> {
+    const prisma = this.options.prisma;
+    const released = await prisma.$executeRaw`
+      UPDATE outbox_events
+      SET status = 'PENDING',
+          claim_token = NULL,
+          lease_expires_at = NULL,
+          updated_at = NOW()
+      WHERE id = ${record.id}::uuid
+        AND status = 'PROCESSING'
+        AND claim_token = ${record.claimToken}::uuid
+    `;
+    if (released === 0) {
+      this.logger.warn(
+        `Lost claim for event ${record.id} before shutdown release`,
+      );
+    }
+  }
+
   private async recoverStuckEvents(): Promise<void> {
     const prisma = this.options.prisma;
-    const thresholdSeconds = this.stuckThreshold / 1000;
+    const legacyThresholdSeconds = this.leaseDuration / 1000;
 
     const recovered = await prisma.$executeRaw`
       UPDATE outbox_events
-      SET status = 'PENDING', claim_token = NULL, updated_at = NOW()
+      SET status = 'PENDING',
+          claim_token = NULL,
+          lease_expires_at = NULL,
+          updated_at = NOW()
       WHERE status = 'PROCESSING'
-        AND updated_at < NOW() - make_interval(secs => ${thresholdSeconds})
+        AND (
+          lease_expires_at <= NOW()
+          OR (
+            lease_expires_at IS NULL
+            AND updated_at <= NOW() - make_interval(secs => ${legacyThresholdSeconds})
+          )
+        )
     `;
 
     if (recovered > 0) {
       this.logger.warn(
-        `Recovered ${recovered} stuck events from PROCESSING state`,
+        `Recovered ${recovered} events with expired PROCESSING leases`,
+      );
+    }
+  }
+
+  private validateLeaseOptions(): void {
+    if (!Number.isFinite(this.leaseDuration) || this.leaseDuration <= 0) {
+      throw new Error('Outbox lease.duration must be a positive finite number');
+    }
+    if (
+      !Number.isFinite(this.heartbeatInterval) ||
+      this.heartbeatInterval <= 0 ||
+      this.heartbeatInterval >= this.leaseDuration / 2
+    ) {
+      throw new Error(
+        'Outbox lease.heartbeatInterval must be positive and less than lease.duration / 2',
+      );
+    }
+    if (
+      !Number.isInteger(this.heartbeatFailureTolerance) ||
+      this.heartbeatFailureTolerance < 0
+    ) {
+      throw new Error(
+        'Outbox lease.heartbeatFailureTolerance must be a non-negative integer',
       );
     }
   }

@@ -92,6 +92,18 @@ const CLAIM_TOKEN_UPGRADE_STATEMENTS = CLAIM_TOKEN_UPGRADE_SQL_FILE.replace(
   .map((s) => s.trim())
   .filter((s) => s.length > 0);
 
+const LEASE_UPGRADE_SQL_FILE = fs.readFileSync(
+  path.join(__dirname, '../../src/sql/upgrade-add-lease.sql'),
+  'utf-8',
+);
+const LEASE_UPGRADE_STATEMENTS = LEASE_UPGRADE_SQL_FILE.replace(
+  /^\s*--.*$/gm,
+  '',
+)
+  .split(';')
+  .map((s) => s.trim())
+  .filter((s) => s.length > 0);
+
 async function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -164,6 +176,7 @@ describe('Outbox E2E', () => {
         'idx_outbox_pending',
         'idx_outbox_processing',
         'idx_outbox_processing_claim_token',
+        'idx_outbox_processing_lease_expiry',
         'idx_outbox_tenant_pending',
         'outbox_events_pkey',
       ]),
@@ -197,6 +210,200 @@ describe('Outbox E2E', () => {
 
     expect(columns).toEqual([{ dataType: 'uuid' }]);
     expect(indexes).toHaveLength(1);
+  });
+
+  it('upgrades a current table with lease recovery idempotently', async () => {
+    await prisma.$executeRawUnsafe(
+      'ALTER TABLE outbox_events DROP COLUMN lease_expires_at',
+    );
+
+    for (const statement of LEASE_UPGRADE_STATEMENTS) {
+      await prisma.$executeRawUnsafe(statement);
+      await prisma.$executeRawUnsafe(statement);
+    }
+
+    const columns = await prisma.$queryRaw<Array<{ dataType: string }>>`
+      SELECT data_type::text AS "dataType"
+      FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = 'outbox_events'
+        AND column_name = 'lease_expires_at'
+    `;
+    const indexes = await prisma.$queryRaw<Array<{ indexname: string }>>`
+      SELECT indexname::text AS indexname
+      FROM pg_indexes
+      WHERE schemaname = current_schema()
+        AND tablename = 'outbox_events'
+        AND indexname = 'idx_outbox_processing_lease_expiry'
+    `;
+
+    expect(columns).toEqual([{ dataType: 'timestamp with time zone' }]);
+    expect(indexes).toHaveLength(1);
+  });
+
+  it('keeps a blocking publisher exclusively leased across two pollers', async () => {
+    await prisma.$executeRaw`
+      INSERT INTO outbox_events (event_type, payload)
+      VALUES ('lease.blocking', '{}'::jsonb)
+    `;
+    let reportFirstDispatchStarted!: () => void;
+    const firstDispatchStarted = new Promise<void>((resolve) => {
+      reportFirstDispatchStarted = resolve;
+    });
+    let releaseFirstDispatch!: () => void;
+    const firstDispatchBarrier = new Promise<void>((resolve) => {
+      releaseFirstDispatch = resolve;
+    });
+    let dispatchCount = 0;
+    let activeDispatches = 0;
+    let maxActiveDispatches = 0;
+    let eventId = '';
+    let initialLeaseExpiry: Date | null = null;
+    const publisher = {
+      publish: jest.fn(async (record: OutboxRecord) => {
+        dispatchCount++;
+        activeDispatches++;
+        maxActiveDispatches = Math.max(maxActiveDispatches, activeDispatches);
+        try {
+          if (dispatchCount === 1) {
+            eventId = record.id;
+            const [lease] = await prisma.$queryRaw<
+              Array<{ leaseExpiresAt: Date }>
+            >`
+              SELECT lease_expires_at AS "leaseExpiresAt"
+              FROM outbox_events
+              WHERE id = ${record.id}::uuid
+            `;
+            initialLeaseExpiry = lease.leaseExpiresAt;
+            reportFirstDispatchStarted();
+            await firstDispatchBarrier;
+          }
+        } finally {
+          activeDispatches--;
+        }
+      }),
+    };
+    const createLeasePoller = () =>
+      new OutboxPoller(
+        {
+          prisma,
+          polling: { enabled: false, batchSize: 1 },
+          delivery: { mode: 'publisher' },
+          lease: {
+            duration: 150,
+            heartbeatInterval: 40,
+            heartbeatFailureTolerance: 1,
+          },
+        },
+        publisher,
+        { getHandlers: jest.fn() } as any,
+        { addInterval: jest.fn(), deleteInterval: jest.fn() } as any,
+      );
+    const firstPoller = createLeasePoller();
+    const secondPoller = createLeasePoller();
+
+    const firstPoll = firstPoller.poll();
+    await firstDispatchStarted;
+    const deadline = Date.now() + 2_000;
+    let heartbeatObserved = false;
+    while (Date.now() < deadline) {
+      const [lease] = await prisma.$queryRaw<
+        Array<{ databaseNow: Date; leaseExpiresAt: Date }>
+      >`
+        SELECT
+          NOW() AS "databaseNow",
+          lease_expires_at AS "leaseExpiresAt"
+        FROM outbox_events
+        WHERE id = ${eventId}::uuid
+      `;
+      if (
+        initialLeaseExpiry &&
+        lease.databaseNow >= initialLeaseExpiry &&
+        lease.leaseExpiresAt > lease.databaseNow
+      ) {
+        heartbeatObserved = true;
+        break;
+      }
+      await sleep(10);
+    }
+    expect(heartbeatObserved).toBe(true);
+    for (let cycle = 0; cycle < 10; cycle++) {
+      await secondPoller.poll();
+    }
+    releaseFirstDispatch();
+    await firstPoll;
+
+    expect(maxActiveDispatches).toBe(1);
+    expect(publisher.publish).toHaveBeenCalledTimes(1);
+  });
+
+  it('recovers an expired process-loss lease without spending retry budget', async () => {
+    await prisma.$executeRaw`
+      INSERT INTO outbox_events (
+        event_type,
+        payload,
+        status,
+        claim_token,
+        lease_expires_at,
+        retry_count
+      ) VALUES (
+        'lease.process-loss',
+        '{}'::jsonb,
+        'PROCESSING',
+        gen_random_uuid(),
+        NOW() - INTERVAL '1 second',
+        0
+      )
+    `;
+    await prisma.$executeRaw`
+      INSERT INTO outbox_events (
+        event_type,
+        payload,
+        status,
+        claim_token,
+        lease_expires_at,
+        updated_at,
+        retry_count
+      ) VALUES (
+        'lease.legacy-process-loss',
+        '{}'::jsonb,
+        'PROCESSING',
+        gen_random_uuid(),
+        NULL,
+        NOW() - INTERVAL '1 second',
+        0
+      )
+    `;
+    const publisher = { publish: jest.fn().mockResolvedValue(undefined) };
+    const poller = new OutboxPoller(
+      {
+        prisma,
+        polling: { enabled: false, batchSize: 2 },
+        delivery: { mode: 'publisher' },
+        lease: { duration: 150, heartbeatInterval: 40 },
+      },
+      publisher,
+      { getHandlers: jest.fn() } as any,
+      { addInterval: jest.fn(), deleteInterval: jest.fn() } as any,
+    );
+
+    for (let cycle = 0; cycle < 10; cycle++) {
+      await poller.poll();
+    }
+
+    const rows = await prisma.$queryRaw<
+      Array<{ status: string; retryCount: number }>
+    >`
+      SELECT status, retry_count AS "retryCount"
+      FROM outbox_events
+      WHERE event_type IN ('lease.process-loss', 'lease.legacy-process-loss')
+      ORDER BY event_type
+    `;
+    expect(publisher.publish).toHaveBeenCalledTimes(2);
+    expect(rows).toEqual([
+      { status: 'SENT', retryCount: 0 },
+      { status: 'SENT', retryCount: 0 },
+    ]);
   });
 
   it.each([

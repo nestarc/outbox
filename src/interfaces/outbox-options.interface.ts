@@ -21,6 +21,15 @@ export interface OutboxDeliveryOptions {
   mode?: 'local' | 'publisher';
 }
 
+export interface OutboxLeaseOptions {
+  /** Claim lifetime in milliseconds. Defaults to stuckThreshold or 300000. */
+  duration?: number;
+  /** Active callback heartbeat interval in milliseconds. Defaults to duration / 3. */
+  heartbeatInterval?: number;
+  /** Consecutive heartbeat errors tolerated before abandoning the claim. Defaults to 1. */
+  heartbeatFailureTolerance?: number;
+}
+
 export interface OutboxOptions {
   /**
    * forRoot: PrismaService class reference (resolved via DI, must be in a @Global module).
@@ -36,8 +45,10 @@ export interface OutboxOptions {
   tenancy?: OutboxTenancyOptions;
   hooks?: OutboxHooks;
   wakeup?: OutboxWakeupOptions;
+  lease?: OutboxLeaseOptions;
   events?: Type[];
   isGlobal?: boolean;
+  /** @deprecated Use lease.duration. Retained as a lease-duration compatibility alias. */
   stuckThreshold?: number;
 }
 
