@@ -1,0 +1,9 @@
+{
+  "name": "@nestarc/outbox-package-exports-consumer-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "smoke": "node src/smoke.js"
+  }
+}

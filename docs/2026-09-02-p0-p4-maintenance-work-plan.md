@@ -193,10 +193,12 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 |  22A | `OUT-M20A`     | P2       | `DONE`     | M    | `OUT-M01`, `OUT-M05–06`, `OUT-M10`                                                   | publisher terminal/tenant-context PostgreSQL E2E                    |
 |  22B | `OUT-M20B`     | P2       | `DONE`     | M    | `OUT-M03`, `OUT-M09`                                                                 | LISTEN/NOTIFY wakeup/fallback PostgreSQL E2E                        |
 |  22C | `OUT-M20C`     | P2       | `DONE`     | M    | `OUT-M02`, `OUT-M05`, `OUT-M19`                                                      | shutdown/retry/upgrade 통합 PostgreSQL E2E                          |
-|   23 | `OUT-M22`      | P2       | `READY`    | M    | 없음                                                                                 | dev dependency audit remediation                                    |
-|   24 | `OUT-M23`      | P2       | `DECISION` | M    | 없음                                                                                 | explicit root/SQL package export 계약                               |
-|   25 | `OUT-M24`      | P2       | `READY`    | S    | 없음                                                                                 | 과거 문서 권위와 현재 handover 정리                                 |
-|   26 | `OUT-M25`      | P2       | `BLOCKED`  | M    | `OUT-M06`, `OUT-M11`, `OUT-M23`                                                      | typechecked packed examples                                         |
+|   23 | `OUT-M22`      | P2       | `DONE`     | M    | 없음                                                                                 | dev dependency audit remediation                                    |
+|   24 | `OUT-M23`      | P2       | `DONE`     | M    | 없음                                                                                 | explicit root/SQL package export 계약                               |
+|   25 | `OUT-M24`      | P2       | `DONE`     | S    | 없음                                                                                 | 과거 문서 권위와 현재 handover 정리                                 |
+|  25A | `OUT-M22B`     | P2       | `READY`    | M    | `OUT-M22`                                                                            | Prisma CLI dev advisory 후속                                        |
+|  25B | `OUT-M22C`     | P2       | `READY`    | M    | `OUT-M22`                                                                            | Jest/Nest dev advisory 후속                                         |
+|   26 | `OUT-M25`      | P2       | `READY`    | M    | `OUT-M06`, `OUT-M11`, `OUT-M23`                                                      | typechecked packed examples                                         |
 |   27 | `OUT-M26`      | P2       | `READY`    | S    | `OUT-M01–02`, `OUT-M08–09`, `OUT-M20A–C`                                             | critical branch coverage gate                                       |
 |   28 | `OUT-M27`      | P3       | `READY`    | M    | 없음                                                                                 | benchmark harness 복구                                              |
 |   29 | `OUT-M28`      | P3       | `DECISION` | S    | 없음                                                                                 | sourcemap/source packaging 계약                                     |
@@ -587,28 +589,49 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 
 ### `OUT-M22` — dev dependency audit remediation
 
-- production audit zero를 permanent gate로 유지한다.
-- Prisma CLI/deepmerge/mysql, Jest/Babel, ESLint/brace-expansion/js-yaml 등 경로를 분리한다.
-- Prisma 7 지원을 지우는 audit 자동 downgrade는 사용하지 않는다.
-- 이 ID의 한 PR에서는 분류와 한 compatible dependency 묶음만 적용한다. 남은 도구 체인 묶음은 구현 전에 `OUT-M22B/C` 같은 별도 queue row로 추가한다.
-- 남은 dev-only exception에는 owner/reason/expiry를 둔다.
+- 상태: `P2 / DONE`; lint 도구 한 묶음만 갱신했고 남은 경로는 `OUT-M22B/C`로 분리했다.
+- [x] production audit zero를 `audit:production` CI/release permanent hard gate로 유지한다.
+- [x] Prisma CLI/deepmerge/mysql, Jest/Babel, ESLint/brace-expansion/js-yaml, Nest test adapter 경로를 분리했다.
+- [x] Prisma 7 지원을 지우는 audit 자동 downgrade를 사용하지 않았다.
+- [x] ESLint 10 flat config + TypeScript ESLint 8과 compatible brace lock refresh 한 묶음만 적용했다.
+- [x] 남은 dev-only exception에 owner/reason/2026-10-04 expiry와 `OUT-M22B/C`를 지정했다.
+
+검증과 예외: `docs/reports/2026-09-04-out-m22-dev-audit.md`. runtime/peer/API 변화가 없는 개발 도구 갱신이므로 package semver 변화는 없다.
+
+### `OUT-M22B` — Prisma CLI dev advisory 후속
+
+- 상태: `P2 / READY`; 선행 `OUT-M22` 완료.
+- exact Prisma 7 지원을 유지하면서 `@prisma/config/deepmerge-ts`와 `mysql2` advisory가 제거되는 supported patch를 검증한다.
+- audit 자동 downgrade나 Prisma 5/6/7 packed control 삭제는 허용하지 않는다.
+- 예외 만료: 2026-10-04 또는 다음 supported Prisma patch 중 빠른 시점.
+
+### `OUT-M22C` — Jest/Nest dev advisory 후속
+
+- 상태: `P2 / READY`; 선행 `OUT-M22` 완료.
+- Jest/Babel coverage의 legacy `js-yaml`과 Nest test adapter의 `body-parser/qs`를 exact control과 함께 갱신한다.
+- production/runtime dependency로 오분류하지 않되, 새 lock의 전체 online audit 결과를 artifact로 남긴다.
+- 예외 만료: 2026-10-04 또는 다음 exact Jest/Nest control refresh 중 빠른 시점.
 
 ### `OUT-M23` — explicit root와 SQL package export 계약
 
-- 실제 public deep import 사용을 조사한 ADR을 먼저 작성한다.
-- 채택 시 root와 필요한 두 SQL asset만 명시적으로 export하고 accidental internals는 차단한다.
-- CJS/type resolution/SQL `require.resolve`/no-optional-pg packed consumers를 둔다.
-- `exports`가 기존 deep import를 깨뜨리면 pre-1.0 minor와 migration note로 낸다.
+- 상태: `P2 / DONE`.
+- [x] published v0.2.1 tarball과 repository/packed consumer의 실제 public deep import 사용을 ADR 0008에 기록했다.
+- [x] root와 fresh/current 두 SQL asset만 명시적으로 export하고 accidental JS/component SQL internals를 차단했다.
+- [x] CJS/type resolution/SQL `require.resolve`/no-optional-pg strict packed consumer를 CI/release gate에 추가했다.
+- [x] 기존 accidental deep import 차단을 next pre-1.0 minor(기본 0.3.0)와 migration note 대상으로 결정했다.
+
+검증: baseline manifest RED, release artifact exact export-map assertion, no-`pg` strict packed consumer PASS. 결정: `docs/adr/0008-explicit-package-exports.md`.
 
 ### `OUT-M24` — 역사 문서와 현재 handover 정리
 
-- old handover/spec/plan/SOLID report 상단에 `HISTORICAL`, `COMPLETED`, `SUPERSEDED`와 이 문서 링크를 둔다.
-- 완료된 v0.2 항목을 unchecked backlog처럼 보이게 하지 않는다.
-- 아직 유효한 poller SRP/typing 관찰만 현재 task ID로 연결하고 과거 작업 지시를 복사하지 않는다.
+- 상태: `P2 / DONE`.
+- [x] old handover/spec/plan/SOLID report 상단에 `HISTORICAL`, `COMPLETED`, `SUPERSEDED`와 이 문서 링크를 추가했다.
+- [x] handover의 완료된 v0.2 항목을 현재 상태 표로 바꿔 unchecked backlog 오인을 제거했다.
+- [x] 아직 유효한 poller SRP는 `OUT-M31`, packed public typing은 `OUT-M25`에만 연결하고 과거 작업 지시를 복사하지 않았다.
 
 ### `OUT-M25` — typechecked packed examples
 
-- 선행: `OUT-M06`, `OUT-M11`, `OUT-M23`.
+- 상태: `P2 / READY`; 선행 `OUT-M06`, `OUT-M11`, `OUT-M23` 완료.
 - local, publisher, tenant provider, SQL migration 예제를 source checkout이 아닌 tgz consumer에서 compile한다.
 - Kafka 등 외부 broker snippet은 DI visibility와 provider registration을 실제 module fixture로 검증하거나 의사 코드라고 표시한다.
 - optional `pg` 부재/존재 경계를 각각 검증한다.
@@ -729,7 +752,7 @@ npm audit --omit=dev
 npm audit
 ```
 
-`npm audit --omit=dev`는 hard zero gate다. 전체 `npm audit`는 `OUT-M22` 완료 전까지 결과와 승인된 dev-only 예외를 기록하는 evidence이며 일반 P0/P1의 자동 hard-fail 조건이 아니다. 여기에 exact tgz digest, allowlist, registry integrity/attestation, workflow permissions, tag/main ancestry, GitHub ruleset/npm environment 증거를 추가한다.
+`npm audit --omit=dev`는 `audit:production`으로 CI/release에서 실행하는 hard zero gate다. 전체 `npm audit`는 `OUT-M22B/C`의 owner/reason/expiry가 있는 dev-only 예외 evidence이며 일반 P0/P1의 자동 hard-fail 조건이 아니다. 여기에 exact tgz digest, allowlist, registry integrity/attestation, workflow permissions, tag/main ancestry, GitHub ruleset/npm environment 증거를 추가한다.
 
 ### 프로필 F — 문서
 
@@ -785,6 +808,9 @@ Outbox ── durable record / publisher callback ──> Jobs adapter ──> J
 | 2026-09-03 | `OUT-M20A`  | `DONE`     | local main `fc782b5` working tree                | publisher final FAILED, provider tenant/ambient context, shutdown rejection; unit/E2E PASS      | M20B/C와 함께 review/commit/push/PR                                    |
 | 2026-09-03 | `OUT-M20B`  | `DONE`     | local main `fc782b5` working tree                | real LISTEN readiness/burst/loss fallback/reconnect generation; PostgreSQL E2E 38 PASS          | M20A/C와 함께 review/commit/push/PR                                    |
 | 2026-09-03 | `OUT-M20C`  | `DONE`     | local main `fc782b5` working tree                | real shutdown release, mixed retry due, v0.1/v0.2 upgraded runtime; packed Prisma 7 PASS        | `OUT-M26` 선행 해소; 다음 낮은 번호 `OUT-M22` 진행                     |
+| 2026-09-04 | `OUT-M22`   | `DONE`     | local main `f54a781` working tree                | production audit 0; ESLint 10 lint, unit 194, build PASS; remaining exceptions split            | `OUT-M22B/C`를 만료 전 각각 처리                                       |
+| 2026-09-04 | `OUT-M23`   | `DONE`     | local main `f54a781` working tree                | published 0.2.1 surface 조사; exact export map + no-pg packed CJS/type/SQL consumer PASS        | next pre-1.0 minor migration note 유지                                 |
+| 2026-09-04 | `OUT-M24`   | `DONE`     | local main `f54a781` working tree                | old handover/spec/plan/SOLID authority banners와 v0.2 status mapping 검토                       | 현재 backlog는 이 문서만 사용                                          |
 
 ### `OUT-M01` 종료 인계
 
@@ -1144,4 +1170,49 @@ Unverified paths and reason: co-located Jobs/Redis/BullMQ crash/restart lifecycl
 External PR, run, release evidence: 없음. disposable PostgreSQL 16 and evidence report were used; no commit/push/PR/release was performed.
 Remaining risk: upgrade lock duration on production-size tables remains OUT-M19 operational risk; this task proves runtime compatibility after upgrade, not online migration performance.
 Next exact action: OUT-M20A–C 변경을 함께 review/commit/push/PR한다. 모든 선행이 해소된 OUT-M26은 READY이며 queue상 다음 낮은 번호 READY는 OUT-M22다.
+```
+
+### `OUT-M22` 종료 인계
+
+```text
+Task: OUT-M22
+State: DONE
+Start ref / end ref: local main@f54a781 / local working tree (uncommitted)
+Changed files: ESLint 10 flat config와 TypeScript ESLint 8 toolchain, compatible brace-expansion lock refresh, production audit CI/release gate, CHANGELOG, dev-audit evidence report, maintenance plan
+Contract / semver decision: runtime dependency/peer/API는 바꾸지 않고 lint 도구 한 묶음만 갱신했다. Prisma 7을 downgrade하지 않았고 remaining Prisma CLI와 Jest/Nest dev-only 경로는 owner/reason/2026-10-04 expiry를 둔 OUT-M22B/C로 분리했다. package semver 변화는 없다.
+Commands and exact results: baseline full audit 10 dev-only(high 7, moderate 1, low 2); ESLint update 후 online response 7 dev-only(high 5, moderate 1, low 1); compatible brace refresh 결과 1.1.18/2.1.4/5.0.9; npm run audit:production 0; ESLint 10 lint PASS; unit 10 suites/194 tests PASS; build PASS; workflow policy 19 immutable refs PASS
+Unverified paths and reason: brace refresh 뒤 full-lock npm audit는 registry ping과 production audit 성공에도 이 host의 npm CLI가 3분 이상 종료되지 않아 최종 aggregate JSON을 확보하지 못했다. offline empty audit를 증거로 사용하지 않았고 OUT-M22B/C가 online artifact를 소유한다.
+External PR, run, release evidence: 없음. docs/reports/2026-09-04-out-m22-dev-audit.md에 경로/예외/만료를 기록했다.
+Remaining risk: Prisma CLI high advisory와 dev Nest adapter low/moderate advisory가 time-bounded exception으로 남는다. package runtime graph에는 포함되지 않는다.
+Next exact action: 2026-10-04 전에 OUT-M22B와 OUT-M22C를 각각 compatible upstream control로 검증한다.
+```
+
+### `OUT-M23` 종료 인계
+
+```text
+Task: OUT-M23
+State: DONE
+Start ref / end ref: local main@f54a781 / local working tree (uncommitted)
+Changed files: package exports manifest, ADR 0008, release artifact exact-map assertion, no-pg packed consumer fixture/runner, CI/release gates, README migration note, CHANGELOG, maintenance plan
+Contract / semver decision: public subpath는 CommonJS/type root와 create-outbox-table.sql/upgrade-to-current.sql 두 개다. accidental dist/**와 component/historical SQL deep import는 ERR_PACKAGE_PATH_NOT_EXPORTED로 차단한다. 이 tightening은 next pre-1.0 minor(기본 0.3.0) migration note 대상이다.
+Commands and exact results: HEAD manifest export assertion RED; published 0.2.1 actual tarball 97 entries/33,383 bytes/no export map 확인; final candidate 134 files/69,776 bytes, sha512-9sK7sz8JNRQxp7uENcEIPOI0A3E6jzbbFMWEYOxUrSM8hFLJ44lziiP6Iri10qg7Q7KW+BZFEz7qKrIMyMzM7A==, sha256 d0c014be176a69173ca9700bd251045e053db86a2413ae550bcb583ac30c9836; exact artifact verify PASS; strict no-pg consumer Node16 type resolution/CJS/two SQL/internal blocking PASS; workflow policy PASS
+Unverified paths and reason: existing Prisma 7 packed consumer install/typecheck/build는 PASS했지만 local PostgreSQL smoke가 Prisma execute 단계에서 실패했고 Docker daemon도 unavailable이라 DB path를 재검증하지 못했다. 새 export-specific consumer는 DB/pg 비의존 계약을 완전히 검증한다. 원격 CI/release는 push 전이다.
+External PR, run, release evidence: published @nestarc/outbox@0.2.1 tarball을 npm registry에서 직접 조사했다. commit/push/PR/release는 수행하지 않았다.
+Remaining risk: undocumented deep import 소비자는 0.3.0 업그레이드 전에 root 또는 두 지원 SQL path로 이동해야 한다.
+Next exact action: remote CI에서 no-pg exports gate와 기존 PostgreSQL packed consumer를 함께 확인하고 0.3.0 release note를 유지한다.
+```
+
+### `OUT-M24` 종료 인계
+
+```text
+Task: OUT-M24
+State: DONE
+Start ref / end ref: local main@f54a781 / local working tree (uncommitted)
+Changed files: historical handover, v0.1/v0.2 specs and plans, 2026-04 SOLID report, maintenance plan
+Contract / semver decision: old documents remain immutable historical context in content but top-level authority is explicitly COMPLETED/SUPERSEDED. Current contract는 README, current backlog/handover는 이 maintenance plan만 권위 있다. runtime/package semver 변화는 없다.
+Commands and exact results: 7개 historical document banner/link review PASS; old handover v0.2 unchecked list를 current status table로 변환; poller SRP는 OUT-M31, packed typing은 OUT-M25에 연결; historical 본문 재포맷 없이 git diff --check PASS
+Unverified paths and reason: 없음. 문서 링크는 repository-relative path로 정적 확인했다.
+External PR, run, release evidence: 없음. commit/push/PR은 수행하지 않았다.
+Remaining risk: 과거 본문 안의 version/line/example은 의도적으로 당시 기록으로 남아 있으므로 banner를 무시하고 현재 지시로 읽으면 안 된다.
+Next exact action: 새 작업은 이 문서의 READY queue만 사용한다. 다음 lowest READY는 OUT-M22B다.
 ```

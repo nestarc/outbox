@@ -112,6 +112,15 @@ function inspectArchive(tarballPath) {
     }
     assert.equal(manifest.name, '@nestarc/outbox');
     assert.match(manifest.version, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/);
+    assert.deepEqual(manifest.exports, {
+      '.': {
+        types: './dist/index.d.ts',
+        require: './dist/index.js',
+        default: './dist/index.js',
+      },
+      './src/sql/create-outbox-table.sql': './src/sql/create-outbox-table.sql',
+      './src/sql/upgrade-to-current.sql': './src/sql/upgrade-to-current.sql',
+    });
     for (const field of ['main', 'types']) {
       assert.equal(
         typeof manifest[field],

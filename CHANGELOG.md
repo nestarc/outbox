@@ -64,6 +64,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The package now declares an explicit export map for the CommonJS/type root
+  and the documented fresh/current SQL migration paths. Accidental `dist/**`
+  and component-migration deep imports are intentionally blocked in the next
+  pre-1.0 minor; consumers must import runtime/types from the root and resolve
+  only `create-outbox-table.sql` or `upgrade-to-current.sql`.
+- The development lint toolchain now uses the supported ESLint 10 flat-config
+  line, TypeScript ESLint 8, and current Prettier compatibility rules. This
+  removes the legacy ESLint 8 dependency path without changing package runtime
+  dependencies or the production audit-zero gate.
+
 - The minimum Node.js engine is now 22. Node 20 reached upstream EOL on
   2026-03-24 and is removed in the next pre-1.0 minor rather than carried as a
   legacy lane. Node 22 and 24 are required runtime controls; Node 26 remains an

@@ -1,5 +1,12 @@
 # @nestarc/outbox — 핸드오버 문서
 
+> [!IMPORTANT]
+> **HISTORICAL / COMPLETED / SUPERSEDED.** 이 문서는 v0.1.0 구현 전 인계 자료이며 현재
+> 계약·상태·backlog가 아니다. 현재 계약은 루트 [`README.md`](../README.md),
+> 현재 작업 상태와 인계는
+> [`2026-09-02-p0-p4-maintenance-work-plan.md`](2026-09-02-p0-p4-maintenance-work-plan.md)를
+> 따른다. 아래 미체크 항목은 실행 지시로 사용하지 않는다.
+
 > **작성일**: 2026-04-10
 > **목적**: 다음 세션(Claude Code 등)에서 바로 구현을 시작할 수 있도록 설계 결정사항과 컨텍스트를 정리
 > **선행 패키지**: `@nestarc/tenancy` (published), `@nestarc/idempotency` v0.1.3 (published)
@@ -420,16 +427,19 @@ const events = await this.prisma.$queryRaw<OutboxRecord[]>`
 - [x] SQL 마이그레이션 파일 제공
 - [x] README + 기본 예제
 
-### v0.2.0 이후
-- [ ] PostgreSQL LISTEN/NOTIFY (실시간 이벤트 전달)
-- [ ] Prisma Client Extensions 기반 통합 (스키마 모델 방식)
-- [ ] @nestarc/tenancy 연동 (테넌트별 이벤트 격리)
-- [ ] Inbox 패턴 (수신 이벤트 중복 처리 방지)
-- [ ] 외부 브로커 어댑터 (Kafka, RabbitMQ — emit 후 status 전환)
-- [ ] OpenTelemetry 트레이싱 미들웨어
-- [ ] Dead letter 관리 API
-- [ ] 메트릭 (처리율, 실패율, 지연 시간)
-- [ ] 이벤트 순서 보장 옵션 (파티셔닝 키)
+### 당시 v0.2.0 이후 아이디어의 현재 상태
+
+| 당시 아이디어 | 현재 상태 |
+| --- | --- |
+| PostgreSQL LISTEN/NOTIFY | v0.2에 완료; 현재 계약은 README 참고 |
+| Prisma Client Extensions 기반 통합 | 현재 실행 큐에 없음 |
+| tenant 연동/격리 | provider·producer/admin 경계 완료 (`OUT-M06`, `OUT-M07`) |
+| Inbox 패턴 | Outbox 비범위; `OUT-B02` 연구 후보 |
+| 외부 브로커 어댑터 | publisher 계약 완료; first-party adapter는 `OUT-B03` 연구 후보 |
+| OpenTelemetry 미들웨어 | first-party 구현은 현재 실행 큐에 없음; correlation/trace metadata와 hooks 제공 |
+| Dead letter 관리 API | 완료 |
+| 메트릭 | hooks로 관측 가능; first-party metrics backend는 현재 실행 큐에 없음 |
+| 이벤트 순서 보장 | 보장하지 않음; strict ordering은 `OUT-B01` 연구 후보 |
 
 ---
 

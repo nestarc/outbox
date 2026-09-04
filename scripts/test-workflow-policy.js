@@ -76,6 +76,8 @@ for (const [name, definition] of [
 
 assert.match(buildAndTest, /node-version: '22'/);
 assert.match(buildAndTest, /npm run test:nest12-consumer/);
+assert.match(buildAndTest, /node scripts\/test-package-exports\.js/);
+assert.match(buildAndTest, /npm run audit:production/);
 assert.match(compatibilityNode24, /node-version: '24'/);
 assert.match(
   compatibilityNode24,

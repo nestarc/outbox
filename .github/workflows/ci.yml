@@ -62,6 +62,9 @@ jobs:
       - name: Compatibility policy
         run: npm run test:compatibility-policy
 
+      - name: Production dependency audit
+        run: npm run audit:production
+
   test:
     name: Test (Node ${{ matrix.node }} x NestJS ${{ matrix.nestjs }} x Prisma ${{ matrix.prisma }})
     needs: lint
@@ -164,6 +167,10 @@ jobs:
       - name: Strict packed modern consumer with PostgreSQL
         if: matrix.node == '22' && matrix.nestjs == '11.2.1' && matrix.prisma == '7.10.0'
         run: npm run test:modern-consumer
+
+      - name: Strict packed package exports consumer without optional pg
+        if: matrix.node == '22' && matrix.nestjs == '11.2.1' && matrix.prisma == '7.10.0'
+        run: npm run test:package-exports
 
       - name: Strict packed Prisma 5 consumer with PostgreSQL
         if: matrix.node == '22' && matrix.nestjs == '10.4.22' && matrix.prisma == '5.22.0'

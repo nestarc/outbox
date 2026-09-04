@@ -191,6 +191,14 @@ with `OutboxSchemaError` (`OUTBOX_SCHEMA_MISMATCH`), including
 `requiredVersion`, the detected `actualVersion`, and missing objects. This is a
 diagnostic check, not an automatic migration; apply the shipped SQL explicitly.
 
+### Supported package paths
+
+The public package surface is the `@nestarc/outbox` root plus the two SQL paths
+shown above. Compiled internals and component/historical migration files are
+not public imports, even when they remain in the tarball for release evidence.
+Use the root entrypoint for runtime values and types, the create SQL for a fresh
+database, and `upgrade-to-current.sql` for every supported existing schema.
+
 <details>
 <summary>View the full SQL</summary>
 

@@ -25,6 +25,15 @@
   ],
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./src/sql/create-outbox-table.sql": "./src/sql/create-outbox-table.sql",
+    "./src/sql/upgrade-to-current.sql": "./src/sql/upgrade-to-current.sql"
+  },
   "files": [
     "dist",
     "src/sql",
@@ -46,8 +55,10 @@
     "test:nest12-candidate": "npm run build && node scripts/test-modern-consumer.js --nest12 --candidate-manifest",
     "test:prisma5-consumer": "npm run build && node scripts/test-prisma5-consumer.js",
     "test:prisma6-consumer": "npm run build && node scripts/test-prisma5-consumer.js --prisma6",
+    "test:package-exports": "npm run build && node scripts/test-package-exports.js",
     "test:compatibility-policy": "node scripts/test-compatibility-policy.js",
     "test:workflow-policy": "node scripts/test-workflow-policy.js",
+    "audit:production": "npm audit --omit=dev --audit-level=low",
     "prisma:generate": "node scripts/generate-prisma-client.js",
     "prepublishOnly": "npm run clean && npm run lint && npm run test && npm run build"
   },
@@ -75,10 +86,12 @@
     "@types/jest": "^29.5.12",
     "@types/node": "^20.11.0",
     "@types/pg": "8.20.0",
-    "@typescript-eslint/eslint-plugin": "^7.18.0",
-    "@typescript-eslint/parser": "^7.18.0",
-    "eslint": "^8.57.0",
-    "eslint-config-prettier": "^9.1.0",
+    "@eslint/js": "^10.0.1",
+    "@typescript-eslint/eslint-plugin": "^8.68.0",
+    "@typescript-eslint/parser": "^8.68.0",
+    "eslint": "^10.9.1",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^16.5.0",
     "jest": "^29.7.0",
     "pg": "8.20.0",
     "prettier": "^3.3.0",

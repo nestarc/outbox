@@ -1,5 +1,12 @@
 # @nestarc/outbox v0.1.0 — Design Spec
 
+> [!IMPORTANT]
+> **HISTORICAL / COMPLETED / SUPERSEDED.** 이 초안은 v0.1.0 설계 기록이며
+> 현재 package contract나 backlog가 아니다. 현재 계약은 루트
+> [`README.md`](../../../README.md), 현재 작업 상태는
+> [`2026-09-02-p0-p4-maintenance-work-plan.md`](../../2026-09-02-p0-p4-maintenance-work-plan.md)를
+> 따른다.
+
 > **Date**: 2026-04-10
 > **Status**: Draft
 > **Approach**: B (Transport interface from day one)
