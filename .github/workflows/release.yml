@@ -152,6 +152,9 @@ jobs:
       - name: Pack and verify the release artifact once
         run: node scripts/release-artifact.js pack release-artifact
 
+      - name: Strict packed README examples with and without optional pg
+        run: node scripts/test-packed-examples.js
+
       - name: Strict packed package exports consumer without optional pg
         run: node scripts/test-package-exports.js
 
@@ -250,6 +253,9 @@ jobs:
 
       - name: Verify exact release artifact
         run: node scripts/release-artifact.js verify "$OUTBOX_TGZ" "$OUTBOX_TGZ_METADATA"
+
+      - name: Strict packed README examples with and without optional pg
+        run: node scripts/test-packed-examples.js
 
       - name: Strict packed NestJS 12.0.1 + Schedule 12.0.1 + Prisma 7.10.0 consumer
         run: node scripts/test-modern-consumer.js --nest12

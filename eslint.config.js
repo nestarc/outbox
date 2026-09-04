@@ -12,6 +12,7 @@ module.exports = [
       'test/e2e/generated/',
       'test/modern-consumer/fixture/',
       'test/package-exports-consumer/fixture/',
+      'test/packed-examples/fixture/',
       'test/prisma5-consumer/fixture/',
       'jest.config.ts',
     ],

@@ -1,0 +1,11 @@
+{
+  "name": "@nestarc/outbox-packed-examples-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "generate": "prisma generate",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "smoke": "node dist/smoke.js"
+  }
+}

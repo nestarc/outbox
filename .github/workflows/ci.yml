@@ -172,6 +172,10 @@ jobs:
         if: matrix.node == '22' && matrix.nestjs == '11.2.3' && matrix.prisma == '7.10.0'
         run: npm run test:package-exports
 
+      - name: Strict packed README examples with and without optional pg
+        if: matrix.node == '22' && matrix.nestjs == '11.2.3' && matrix.prisma == '7.10.0'
+        run: npm run test:packed-examples
+
       - name: Strict packed Prisma 5 consumer with PostgreSQL
         if: matrix.node == '22' && matrix.nestjs == '10.4.22' && matrix.prisma == '5.22.0'
         run: npm run test:prisma5-consumer

@@ -198,7 +198,7 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 |   25 | `OUT-M24`      | P2       | `DONE`     | S    | 없음                                                                                 | 과거 문서 권위와 현재 handover 정리                                 |
 |  25A | `OUT-M22B`     | P2       | `BLOCKED`  | M    | `OUT-M22`                                                                            | Prisma CLI dev advisory 후속                                        |
 |  25B | `OUT-M22C`     | P2       | `DONE`     | M    | `OUT-M22`                                                                            | Jest/Nest dev advisory 후속                                         |
-|   26 | `OUT-M25`      | P2       | `READY`    | M    | `OUT-M06`, `OUT-M11`, `OUT-M23`                                                      | typechecked packed examples                                         |
+|   26 | `OUT-M25`      | P2       | `DONE`     | M    | `OUT-M06`, `OUT-M11`, `OUT-M23`                                                      | typechecked packed examples                                         |
 |   27 | `OUT-M26`      | P2       | `READY`    | S    | `OUT-M01–02`, `OUT-M08–09`, `OUT-M20A–C`                                             | critical branch coverage gate                                       |
 |   28 | `OUT-M27`      | P3       | `READY`    | M    | 없음                                                                                 | benchmark harness 복구                                              |
 |   29 | `OUT-M28`      | P3       | `DECISION` | S    | 없음                                                                                 | sourcemap/source packaging 계약                                     |
@@ -637,10 +637,14 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 
 ### `OUT-M25` — typechecked packed examples
 
-- 상태: `P2 / READY`; 선행 `OUT-M06`, `OUT-M11`, `OUT-M23` 완료.
-- local, publisher, tenant provider, SQL migration 예제를 source checkout이 아닌 tgz consumer에서 compile한다.
-- Kafka 등 외부 broker snippet은 DI visibility와 provider registration을 실제 module fixture로 검증하거나 의사 코드라고 표시한다.
-- optional `pg` 부재/존재 경계를 각각 검증한다.
+- 상태: `P2 / DONE`; 선행 `OUT-M06`, `OUT-M11`, `OUT-M23` 완료.
+- [x] installed tgz의 README에서 9개 TypeScript 예제를 직접 추출해 strict Node16 / `skipLibCheck: false`로 compile/build하고 실제 Nest module graph와 PostgreSQL에서 실행한다.
+- [x] local Prisma/handler/email provider 등록과 async publisher의 dependency imports 및 `delivery.mode`를 수정했다. `AsyncLocalStorage` tenant provider 자체도 README에서 추출해 provenance/context restoration을 검증한다.
+- [x] Kafka 예제는 실제 Nest module fixture로 constructor DI와 message mapping을 검증하며, producer double 사용 및 외부 broker 전달 비검증을 명시했다.
+- [x] 동일 tgz와 Nest 11.2.3/Prisma 5.22.0 tuple에서 optional `pg` 부재/존재를 각각 검증했다. no-pg local/publisher/tenant 실행과 typed wakeup-only startup failure, pg-present polling-disabled LISTEN/NOTIFY 전달이 통과했다.
+- [x] README의 두 public SQL path를 resolve하고 fresh SQL 및 unified upgrade 2회 적용을 실제 DB로 확인했다. CI와 Node 22/24 release exact-artifact gate에 연결했다.
+
+검증: 프로필 A/B/D/F. unit 10 suites/194 tests, PostgreSQL E2E 1 suite/38 tests, 두 packed example lanes, 기존 no-pg exports 및 Prisma 7 strict packed consumer PASS. 증거: [OUT-M25 packed examples report](reports/2026-09-05-out-m25-packed-examples.md). runtime/API/schema/peer/package version 변화는 없다.
 
 ### `OUT-M26` — critical coverage contract
 
@@ -1254,4 +1258,19 @@ Unverified paths and reason: remote Node 22/24 Actions는 push 전이라 미실�
 External PR, run, release evidence: local disposable loopback PostgreSQL 16과 exact tarball을 사용했다. 선행 29개 commit이 local main에만 있어 현재 5319d79에서 branch를 만들었으며 사용자가 지정한 두 작업을 한 세션에서 진행했다. shared issue claim/commit/push/PR/release는 수행하지 않았다.
 Remaining risk: OUT-M22B의 Prisma CLI dev-only 예외만 남는다. 기존 Nest/Jest 예외는 online audit로 종료했다.
 Next exact action: 변경 review 후 원격 CI에서 갱신된 Nest 11.2.3 tuple과 기존 Node 22/24, Nest 10/12, Prisma 5/6/7 lanes를 확인한다. OUT-M22B는 supported upstream patch 대기다.
+```
+
+### `OUT-M25` 종료 인계
+
+```text
+Task: OUT-M25
+State: DONE
+Start ref / end ref: local main@8234baf / codex/out-m25-packed-examples working tree (uncommitted)
+Changed files: README/CHANGELOG, scripts/test-packed-examples.js, test/packed-examples fixture and instructions, package.json test command, ESLint fixture exclusion, CI/release gates, maintenance plan and 2026-09-05 evidence report
+Contract / semver decision: README examples are extracted from the installed tarball and verified through real Nest DI/PostgreSQL. The optional-peer control holds Nest 11.2.3/Prisma 5.22.0 constant and adds only pg@8.20.0 in the present lane; existing Prisma 7 consumer remains verified. KafkaProducer and email are application-owned doubles, not broker durability evidence. No runtime/API/peer/schema/package version change; existing accumulated 0.3.0 decisions remain.
+Commands and exact results: first RED packed handler TS2339 (emailService missing); clean npm ci --strict-peer-deps 645 packages PASS; unit 10 suites/194 tests PASS; PostgreSQL E2E 1 suite/38 tests PASS; lint/typecheck/build/compatibility/workflow policy PASS (19 immutable refs); same final tgz 134 files/70,778 bytes, SHA-256 06d0f7c38f57328ee8d60bcc8c7f32f53ea1cc165a281f477331786e32c6d895; two strict README example lanes (nine TS fragments each, fresh SQL + upgrade twice), no-pg exports and Nest 11.2.3/Prisma 7.10.0 PostgreSQL consumer PASS; scoped Prettier/JS syntax/git diff --check PASS.
+Unverified paths and reason: remote Node 22/24 Actions were not dispatched; local runtime is Node 24.11.1/npm 11.6.2. SQL assets run intact via Prisma CLI rather than invoking the README psql shell command. Kafka/email external systems are explicitly outside the fixture.
+External PR, run, release evidence: fetch confirmed remote main/v0.2.1 remain 873f95b and npm latest 0.2.1; 30 local-only prerequisite commits were preserved by branching from local main. No shared issue claim, commit/push/PR/release was performed. Disposable compose project outbox-out-m25-20260905 was stopped after validation; exact results and artifact digest are in docs/reports/2026-09-05-out-m25-packed-examples.md.
+Remaining risk: CI/release still need remote execution after review/push. The new gate checks example typing/DI/delivery, not external broker guarantees or historical-schema migration performance.
+Next exact action: review the OUT-M25 changes and run remote Node 22/24 gates after push. OUT-M22B remains blocked on a supported upstream patch; the next READY implementation task is OUT-M26.
 ```

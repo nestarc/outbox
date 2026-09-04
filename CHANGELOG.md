@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- README local, async publisher, tenant provider, wakeup, and SQL examples now
+  compile and run from the installed tarball in strict consumers with and
+  without optional `pg`. CI/release gates verify Nest dependency visibility,
+  PostgreSQL transactions and tenant restoration, and notification-only
+  delivery. Examples now register handler dependencies and import the async
+  publisher's configuration, tenant context, and broker provider modules.
+
 - Runtime startup now validates the required outbox columns, indexes, and
   constraints and throws `OutboxSchemaError` with stable code
   `OUTBOX_SCHEMA_MISMATCH`, required/actual versions, and missing objects before

@@ -55,6 +55,7 @@
     "test:nest12-candidate": "npm run build && node scripts/test-modern-consumer.js --nest12 --candidate-manifest",
     "test:prisma5-consumer": "npm run build && node scripts/test-prisma5-consumer.js",
     "test:prisma6-consumer": "npm run build && node scripts/test-prisma5-consumer.js --prisma6",
+    "test:packed-examples": "npm run build && node scripts/test-packed-examples.js",
     "test:package-exports": "npm run build && node scripts/test-package-exports.js",
     "test:compatibility-policy": "node scripts/test-compatibility-policy.js",
     "test:workflow-policy": "node scripts/test-workflow-policy.js",

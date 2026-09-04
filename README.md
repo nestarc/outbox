@@ -57,11 +57,13 @@ declared peer ranges is not implied.
 
 ### 1. Register the module
 
+<!-- packed-example:local:start -->
 ```typescript
 import { OutboxModule } from '@nestarc/outbox';
 
 @Module({
   imports: [
+    PrismaModule,
     OutboxModule.forRoot({
       prisma: PrismaService,
       polling: {
@@ -76,14 +78,17 @@ import { OutboxModule } from '@nestarc/outbox';
       },
     }),
   ],
+  providers: [OrderService, OrderNotificationListener, EmailService],
 })
 export class AppModule {}
 ```
+<!-- packed-example:local:end -->
 
 > When passing a class reference to `prisma` in `forRoot()`, the class must be provided by a `@Global()` module (e.g. `PrismaModule`) so NestJS can resolve it across module boundaries.
 
 ### 2. Define an event class
 
+<!-- packed-example:event:start -->
 ```typescript
 import { OutboxEvent } from '@nestarc/outbox';
 
@@ -98,9 +103,11 @@ export class OrderCreatedEvent extends OutboxEvent {
   }
 }
 ```
+<!-- packed-example:event:end -->
 
 ### 3. Emit inside a transaction
 
+<!-- packed-example:emit:start -->
 ```typescript
 import { OutboxEmitter } from '@nestarc/outbox';
 
@@ -128,6 +135,7 @@ export class OrderService {
   }
 }
 ```
+<!-- packed-example:emit:end -->
 
 The `outbox.emit(tx, event)` call writes the event row in the **same database transaction** as your business logic. If the transaction rolls back, the event is never stored — no dual-write problem.
 
@@ -135,11 +143,14 @@ The third argument is optional. Use it when downstream consumers need stable met
 
 ### 4. Handle the event
 
+<!-- packed-example:handler:start -->
 ```typescript
 import { OnOutboxEvent, OutboxHandlerContext } from '@nestarc/outbox';
 
 @Injectable()
 export class OrderNotificationListener {
+  constructor(private readonly emailService: EmailService) {}
+
   @OnOutboxEvent(OrderCreatedEvent)
   async handleOrderCreated(
     payload: { orderId: string; total: number },
@@ -150,8 +161,21 @@ export class OrderNotificationListener {
   }
 }
 ```
+<!-- packed-example:handler:end -->
 
 > If an event type has no registered handlers, the event is marked `FAILED` with an explanatory `last_error` to prevent silent data loss. Check your handler registrations if you see unexpected `FAILED` events.
+
+### Executable example checks
+
+The marked examples above and the async, tenant-provider, publisher, wakeup,
+and SQL examples below are extracted from the **installed tarball README** by
+`npm run test:packed-examples`. A strict isolated consumer compiles them with
+`skipLibCheck: false`, initializes the real Nest module graph, and exercises
+transactions and delivery against PostgreSQL 16 with and without optional `pg`.
+The fixture supplies application-owned Prisma models, imports, configuration,
+and email/broker doubles; register your own services in those places.
+
+See [the fixture and run instructions](test/packed-examples/README.md).
 
 ## SQL Migration
 
@@ -159,6 +183,7 @@ The `outbox_events` table is **not** managed through your `schema.prisma`. It us
 
 The migration file is shipped with the package at `src/sql/create-outbox-table.sql`. Run it once against your database:
 
+<!-- packed-example:sql-create:start -->
 ```bash
 # Print the path to the bundled SQL file
 node -e "console.log(require.resolve('@nestarc/outbox/src/sql/create-outbox-table.sql'))"
@@ -166,15 +191,18 @@ node -e "console.log(require.resolve('@nestarc/outbox/src/sql/create-outbox-tabl
 # Apply with psql
 psql "$DATABASE_URL" -f "$(node -e "console.log(require.resolve('@nestarc/outbox/src/sql/create-outbox-table.sql'))")"
 ```
+<!-- packed-example:sql-create:end -->
 
 The file creates the table, retry/status indexes, and metadata indexes. It is safe to run multiple times (`CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS`).
 
 For every existing 0.1.x or 0.2.x install, stop/drain old pollers and apply the
 single idempotent current upgrade before starting this runtime:
 
+<!-- packed-example:sql-upgrade:start -->
 ```bash
 psql "$DATABASE_URL" -f "$(node -e "console.log(require.resolve('@nestarc/outbox/src/sql/upgrade-to-current.sql'))")"
 ```
+<!-- packed-example:sql-upgrade:end -->
 
 The unified upgrade adds v0.2 metadata plus claim ownership, lease, persisted
 retry scheduling, admin cursor/retention indexes, and current CHECK
@@ -337,14 +365,20 @@ delivery; corrupt status, retry, date, payload, or headers values throw
 
 ### Async registration
 
-For dynamic configuration (e.g. reading from `ConfigService`):
+For dynamic configuration (e.g. reading from `ConfigService`), this publisher
+example imports modules that export `PrismaService`, `ConfigService`,
+`TenantContext`, and `KafkaProducer`, respectively. `RequestTenantProvider` is
+defined in [Tenancy](#tenancy); `KafkaTransport` is defined in
+[Custom Transport](#custom-transport):
 
+<!-- packed-example:async:start -->
 ```typescript
 OutboxModule.forRootAsync({
-  imports: [PrismaModule],
+  imports: [PrismaModule, ConfigModule, TenantContextModule, KafkaModule],
   useFactory: (config: ConfigService, prisma: PrismaService) => ({
     prisma,
     polling: { interval: config.get('OUTBOX_POLL_INTERVAL') },
+    delivery: { mode: 'publisher' },
     tenancy: { policy: 'required' },
   }),
   inject: [ConfigService, PrismaService],
@@ -353,6 +387,7 @@ OutboxModule.forRootAsync({
   isGlobal: true,
 });
 ```
+<!-- packed-example:async:end -->
 
 `useFactory` and `OutboxOptionsFactory` own runtime values only. Provider graph
 registrations (`transport`, `tenantProvider`) and module scope (`isGlobal`) are
@@ -561,6 +596,44 @@ personal data in payloads, headers, or error text.
 
 Tenancy integration is optional and has no hard dependency on `@nestarc/tenancy`.
 
+A provider can restore trusted ambient context with `AsyncLocalStorage`. Your
+request/authentication layer enters the validated tenant context; local delivery
+uses `runWithTenant()` to restore the persisted tenant around each handler:
+
+<!-- packed-example:tenant-provider:start -->
+```typescript
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { Injectable } from '@nestjs/common';
+import type { OutboxTenantProvider } from '@nestarc/outbox';
+
+@Injectable()
+export class TenantContext {
+  readonly storage = new AsyncLocalStorage<string>();
+}
+
+@Injectable()
+export class RequestTenantProvider implements OutboxTenantProvider {
+  constructor(private readonly context: TenantContext) {}
+
+  getTenantId(): string | undefined {
+    return this.context.storage.getStore();
+  }
+
+  runWithTenant<T>(tenantId: string, fn: () => Promise<T>): Promise<T> {
+    return this.context.storage.run(tenantId, fn);
+  }
+}
+
+export { RequestTenantProvider as TenantContextProvider };
+```
+<!-- packed-example:tenant-provider:end -->
+
+Export `TenantContext` from `TenantContextModule` and include that module in
+`forRootAsync.imports`. With synchronous `forRoot` below, both the Prisma
+service and injected `TenantContext` must instead be exported by global modules
+imported by the application:
+
+<!-- packed-example:tenant:start -->
 ```typescript
 OutboxModule.forRoot({
   prisma: PrismaService,
@@ -570,6 +643,7 @@ OutboxModule.forRoot({
   },
 });
 ```
+<!-- packed-example:tenant:end -->
 
 Tenant IDs are validated before any outbox SQL runs. They must be strings,
 non-empty, and free of leading or trailing whitespace; the package never trims
@@ -644,6 +718,7 @@ Polling remains the source of truth. Wakeup is an optional latency improvement: 
 npm install pg
 ```
 
+<!-- packed-example:wakeup:start -->
 ```typescript
 OutboxModule.forRoot({
   prisma: PrismaService,
@@ -655,6 +730,7 @@ OutboxModule.forRoot({
   },
 });
 ```
+<!-- packed-example:wakeup:end -->
 
 If the initial notification client creation, connection, or `LISTEN` query fails
 while polling is enabled, the package closes that client, logs the degraded
@@ -783,6 +859,7 @@ The default `delivery.mode` is `local`: the poller looks up registered `@OnOutbo
 
 For broker-style delivery, set `delivery.mode` to `publisher` and provide a transport that implements `OutboxPublisher`. Publisher mode does not require local handlers:
 
+<!-- packed-example:publisher:start -->
 ```typescript
 import { OutboxPublisher, OutboxRecord } from '@nestarc/outbox';
 
@@ -804,9 +881,17 @@ export class KafkaTransport implements OutboxPublisher {
   }
 }
 ```
+<!-- packed-example:publisher:end -->
 
-Register it via module options (`transport` stays top-level when using
-`forRootAsync`):
+Here `KafkaProducer` is an application-owned adapter. Register and export it
+from `KafkaModule`; the [async registration](#async-registration) example makes
+that dependency visible to `KafkaTransport`. The packed example test uses a
+recording producer double, so it verifies DI and message mapping, not a real
+Kafka connection or broker delivery guarantees.
+
+For synchronous registration below, `KafkaProducer` and `PrismaService` must be
+exported by global modules imported by the application (`transport` stays
+top-level when using `forRootAsync`):
 
 ```typescript
 OutboxModule.forRoot({
