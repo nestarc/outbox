@@ -98,11 +98,11 @@ jobs:
             schedule: '4.1.2'
             prisma: '6.19.3'
           - node: '22'
-            nestjs: '11.2.1'
+            nestjs: '11.2.3'
             schedule: '5.0.1'
             prisma: '7.10.0'
           - node: '24'
-            nestjs: '11.2.1'
+            nestjs: '11.2.3'
             schedule: '5.0.1'
             prisma: '7.10.0'
           - node: '22'
@@ -165,11 +165,11 @@ jobs:
         run: npm run test:e2e
 
       - name: Strict packed modern consumer with PostgreSQL
-        if: matrix.node == '22' && matrix.nestjs == '11.2.1' && matrix.prisma == '7.10.0'
+        if: matrix.node == '22' && matrix.nestjs == '11.2.3' && matrix.prisma == '7.10.0'
         run: npm run test:modern-consumer
 
       - name: Strict packed package exports consumer without optional pg
-        if: matrix.node == '22' && matrix.nestjs == '11.2.1' && matrix.prisma == '7.10.0'
+        if: matrix.node == '22' && matrix.nestjs == '11.2.3' && matrix.prisma == '7.10.0'
         run: npm run test:package-exports
 
       - name: Strict packed Prisma 5 consumer with PostgreSQL

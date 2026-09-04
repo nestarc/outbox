@@ -1,0 +1,43 @@
+{
+  "capturedAt": "2026-09-05T08:22:46.074407+09:00",
+  "registry": "https://registry.npmjs.org/",
+  "node": "v24.11.1",
+  "npm": "11.6.2",
+  "startCommit": "5319d791361a28c7baeea02e77dc08f121edac36",
+  "beforeLockSha256": "d559434a1f0777501db9dd5db553802971b229b0465d60f97f9557c3b0761bbd",
+  "afterLockSha256": "cb1b4e79696c13340bc93cd1ad5e101017c63bc1e44cc971982a7a4ceff34f6f",
+  "audits": {
+    "audit-before.json": {
+      "command": "npm audit --json",
+      "exitCode": 1
+    },
+    "audit-after.json": {
+      "command": "npm audit --json",
+      "exitCode": 1
+    },
+    "audit-production.json": {
+      "command": "npm audit --omit=dev --json",
+      "exitCode": 0
+    }
+  },
+  "registryCommands": [
+    "npm view prisma@7 version --json",
+    "npm view prisma dist-tags --json",
+    "npm view prisma@7.10.0 dependencies --json",
+    "npm view @prisma/config@7.10.0 dependencies --json",
+    "npm view @nestjs/platform-express@11.2.3 version dependencies peerDependencies --json",
+    "npm view js-yaml@3.15.2 version dist.integrity --json"
+  ],
+  "artifactSha256": {
+    "audit-after.json": "4cbcf48d535b745e521b3af5097cc00e2d44098e8514dd9cc88862f532066e19",
+    "audit-before.json": "a96ad6be911f51baf304a840a25080f2c1395c433bd631f2ce32b2c8875b5aae",
+    "audit-production.json": "e157e257ec9056d2c668b80e5f6b352cee40aef6274529101a5a373d81ba7d44",
+    "js-yaml3-control.json": "2c134d67acf234fab0927c13a749c6ccdaa18b6420ffdedb42ef7f65c068fcde",
+    "nest11-control.json": "a361da902b88f563a78fb5b834b389e8117b868c819bb98585527ade2027b0d4",
+    "prisma-7.10.0-dependencies.json": "de4033feeee126729157399240b806d88a23c69073716ceabfd1eac09afb44a7",
+    "prisma-config-7.10.0-dependencies.json": "9dbf707fc65a011e23fa02d4a40a70fa71f0478fba35be0d8147da67a70ab1da",
+    "prisma-dist-tags.json": "edbe4f2f0ad542372892051df96e5a321902175e9c0170e2e22cd9c7e0fa6673",
+    "prisma7-versions.json": "ad155fae60f438e42dfaafe64e3b5d081f454de87b0d174e84fd693d3c5bfa30",
+    "packed-artifact.json": "1c50cf82127c6d67e2d1fc205151917b2c336511cc25f73bff6026ffcbd3d6fa"
+  }
+}

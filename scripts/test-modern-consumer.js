@@ -18,7 +18,7 @@ const { verifyArtifact } = require('./release-artifact');
 const FIXTURE_DIRECTORY = path.join('test', 'modern-consumer', 'fixture');
 const NEST12 = process.argv.includes('--nest12');
 const CANDIDATE_MANIFEST = process.argv.includes('--candidate-manifest');
-const NEST_VERSION = NEST12 ? '12.0.1' : '11.2.1';
+const NEST_VERSION = NEST12 ? '12.0.1' : '11.2.3';
 const SCHEDULE_VERSION = NEST12 ? '12.0.1' : '5.0.1';
 const EXACT_DEPENDENCIES = {
   '@nestjs/common': NEST_VERSION,

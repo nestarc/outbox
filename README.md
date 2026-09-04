@@ -45,7 +45,7 @@ only against the repository's development dependencies:
 | ----- | ------- | -------- | ------ | ---------------------------------------------------------------------------------- |
 | 22    | 10.4.22 | 4.1.2    | 5.22.0 | generate, strict typecheck/build, SQL asset load, PostgreSQL emit/poll/admin smoke |
 | 22    | 10.4.22 | 4.1.2    | 6.19.3 | source E2E plus the same strict legacy packed PostgreSQL consumer                  |
-| 22/24 | 11.2.1  | 5.0.1    | 7.10.0 | source E2E; Node 22 also runs the strict packed PostgreSQL consumer                |
+| 22/24 | 11.2.3  | 5.0.1    | 7.10.0 | source E2E; Node 22 also runs the strict packed PostgreSQL consumer                |
 | 22/24 | 12.0.1  | 12.0.1   | 7.10.0 | source E2E plus strict packed PostgreSQL consumer on both required Node controls   |
 
 All three Prisma majors consume the same package root declarations and shipped

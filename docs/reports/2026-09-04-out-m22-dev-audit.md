@@ -1,5 +1,10 @@
 # OUT-M22 development dependency audit remediation
 
+> 2026-09-05 follow-up: OUT-M22C is resolved; OUT-M22B remains blocked on a
+> supported Prisma 7 fix. The complete online before/after audit is now
+> available in the [OUT-M22B/C report](2026-09-05-out-m22bc-dev-audit.md).
+> The results below are the historical 2026-09-04 snapshot.
+
 - Date: 2026-09-04 (Asia/Seoul)
 - Runtime package: `@nestarc/outbox@0.2.1`
 - Scope: one compatible ESLint/tooling update group; no runtime dependency or

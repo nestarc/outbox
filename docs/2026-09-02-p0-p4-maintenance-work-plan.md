@@ -117,7 +117,7 @@ Next exact action:
 | 축         | 공개 선언                               | 현재 자동 증거                        | 유지보수 결론                                                                |
 | ---------- | --------------------------------------- | ------------------------------------- | ---------------------------------------------------------------------------- |
 | Node       | `>=22`                                  | CI/release Node 22/24; Node 26 canary | Node 20은 EOL로 제거했고 22/24만 필수 지원한다 (`OUT-M14`).                  |
-| NestJS     | 10/11/12                                | exact 10.4.22, 11.2.1, 12.0.1         | Nest 12 strict packed PostgreSQL 증거를 Node 22/24에서 유지한다.             |
+| NestJS     | 10/11/12                                | exact 10.4.22, 11.2.3, 12.0.1         | Nest 12 strict packed PostgreSQL 증거를 Node 22/24에서 유지한다.             |
 | Schedule   | 4/5/12                                  | Nest 10×4, Nest 11×5, Nest 12×12      | exact Schedule 12.0.1을 Nest 12 control에 고정한다.                          |
 | Prisma     | 5/6/7                                   | exact 5.22.0, 6.19.3, 7.10.0          | 세 major의 strict packed PostgreSQL consumer와 CI/release lane을 유지한다.   |
 | PostgreSQL | transactional SQL implementation        | PostgreSQL 16 CI/release              | 최소 지원 버전은 운영 문서에서 명시하고 migration 경로를 실제 DB로 검증한다. |
@@ -196,8 +196,8 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 |   23 | `OUT-M22`      | P2       | `DONE`     | M    | 없음                                                                                 | dev dependency audit remediation                                    |
 |   24 | `OUT-M23`      | P2       | `DONE`     | M    | 없음                                                                                 | explicit root/SQL package export 계약                               |
 |   25 | `OUT-M24`      | P2       | `DONE`     | S    | 없음                                                                                 | 과거 문서 권위와 현재 handover 정리                                 |
-|  25A | `OUT-M22B`     | P2       | `READY`    | M    | `OUT-M22`                                                                            | Prisma CLI dev advisory 후속                                        |
-|  25B | `OUT-M22C`     | P2       | `READY`    | M    | `OUT-M22`                                                                            | Jest/Nest dev advisory 후속                                         |
+|  25A | `OUT-M22B`     | P2       | `BLOCKED`  | M    | `OUT-M22`                                                                            | Prisma CLI dev advisory 후속                                        |
+|  25B | `OUT-M22C`     | P2       | `DONE`     | M    | `OUT-M22`                                                                            | Jest/Nest dev advisory 후속                                         |
 |   26 | `OUT-M25`      | P2       | `READY`    | M    | `OUT-M06`, `OUT-M11`, `OUT-M23`                                                      | typechecked packed examples                                         |
 |   27 | `OUT-M26`      | P2       | `READY`    | S    | `OUT-M01–02`, `OUT-M08–09`, `OUT-M20A–C`                                             | critical branch coverage gate                                       |
 |   28 | `OUT-M27`      | P3       | `READY`    | M    | 없음                                                                                 | benchmark harness 복구                                              |
@@ -600,17 +600,23 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 
 ### `OUT-M22B` — Prisma CLI dev advisory 후속
 
-- 상태: `P2 / READY`; 선행 `OUT-M22` 완료.
-- exact Prisma 7 지원을 유지하면서 `@prisma/config/deepmerge-ts`와 `mysql2` advisory가 제거되는 supported patch를 검증한다.
-- audit 자동 downgrade나 Prisma 5/6/7 packed control 삭제는 허용하지 않는다.
-- 예외 만료: 2026-10-04 또는 다음 supported Prisma patch 중 빠른 시점.
+- 상태: `P2 / BLOCKED`; 2026-09-05 online registry 확인 결과 supported Prisma 7 수정 버전이 아직 없다.
+- [x] 전체 online audit과 published dependency metadata를 확보했다. 최신 stable Prisma 7은 `7.10.0`이며 `@prisma/config@7.10.0 -> deepmerge-ts@7.1.5`, `prisma@7.10.0 -> mysql2@3.15.3` exact pin이 남아 있다.
+- [x] Prisma CLI/client/adapter `7.10.0`과 Prisma 5/6/7 packed control을 보존했다. npm이 제안한 Prisma `6.19.3` downgrade, `latest`의 `8.0.0-rc.13`, out-of-range override는 채택하지 않았다.
+- [ ] advisory가 제거된 supported Prisma 7 patch가 게시되면 exact control을 함께 갱신하고 audit/generate/E2E/packed 검증을 실행한다.
+- 남은 audit: Prisma 경로 high 4 dependency nodes; production 0. Owner: Outbox maintainers. 예외 만료는 기존 2026-10-04 또는 다음 supported Prisma patch 중 빠른 시점을 유지하며 자동 연장하지 않는다.
+
+증거: [OUT-M22B/C report](reports/2026-09-05-out-m22bc-dev-audit.md), [online audit 및 registry 원본](reports/2026-09-05-out-m22bc-audit/metadata.json). 코드 수정 완료로 간주하지 않는다.
 
 ### `OUT-M22C` — Jest/Nest dev advisory 후속
 
-- 상태: `P2 / READY`; 선행 `OUT-M22` 완료.
-- Jest/Babel coverage의 legacy `js-yaml`과 Nest test adapter의 `body-parser/qs`를 exact control과 함께 갱신한다.
-- production/runtime dependency로 오분류하지 않되, 새 lock의 전체 online audit 결과를 artifact로 남긴다.
-- 예외 만료: 2026-10-04 또는 다음 exact Jest/Nest control refresh 중 빠른 시점.
+- 상태: `P2 / DONE`; Nest/Jest/Babel advisory 경로를 compatible update로 제거했다.
+- [x] Nest common/core/platform-express/testing과 CI/release/packed/README exact control을 `11.2.3`으로 동기화했다.
+- [x] Jest `29.7.0`/ts-jest `29.4.9`를 유지하며 `js-yaml 3.15.2`, Babel core `7.29.7`, browserslist `4.28.9`, body-parser `2.3.0`, qs `6.16.0`으로 호환 갱신했다. Jest major 변경이나 override가 필요하지 않았다.
+- [x] 새 lock의 전체 online audit 원본을 artifact로 저장했다. 전체 9 → 4 (남은 경로는 OUT-M22B), production 0이며 Nest/Jest 예외를 종료했다.
+- [x] clean strict install, unit/coverage 194 tests, PostgreSQL E2E 38 tests, lint/typecheck/build, compatibility/workflow policy를 검증했다. 동일 최종 tgz로 no-pg exports 및 Nest 10/11/12 + Prisma 5/6/7 strict packed PostgreSQL consumers 모두 통과했다.
+
+검증과 exact packed consumer 증거: [OUT-M22B/C report](reports/2026-09-05-out-m22bc-dev-audit.md). runtime/API/peer/schema 및 package semver 변화는 없다.
 
 ### `OUT-M23` — explicit root와 SQL package export 계약
 
@@ -752,7 +758,7 @@ npm audit --omit=dev
 npm audit
 ```
 
-`npm audit --omit=dev`는 `audit:production`으로 CI/release에서 실행하는 hard zero gate다. 전체 `npm audit`는 `OUT-M22B/C`의 owner/reason/expiry가 있는 dev-only 예외 evidence이며 일반 P0/P1의 자동 hard-fail 조건이 아니다. 여기에 exact tgz digest, allowlist, registry integrity/attestation, workflow permissions, tag/main ancestry, GitHub ruleset/npm environment 증거를 추가한다.
+`npm audit --omit=dev`는 `audit:production`으로 CI/release에서 실행하는 hard zero gate다. 전체 `npm audit`는 `OUT-M22B`의 owner/reason/expiry가 있는 dev-only 예외 evidence (`OUT-M22C` 예외는 2026-09-05 종료)이며 일반 P0/P1의 자동 hard-fail 조건이 아니다. 여기에 exact tgz digest, allowlist, registry integrity/attestation, workflow permissions, tag/main ancestry, GitHub ruleset/npm environment 증거를 추가한다.
 
 ### 프로필 F — 문서
 
@@ -811,6 +817,8 @@ Outbox ── durable record / publisher callback ──> Jobs adapter ──> J
 | 2026-09-04 | `OUT-M22`   | `DONE`     | local main `f54a781` working tree                | production audit 0; ESLint 10 lint, unit 194, build PASS; remaining exceptions split            | `OUT-M22B/C`를 만료 전 각각 처리                                       |
 | 2026-09-04 | `OUT-M23`   | `DONE`     | local main `f54a781` working tree                | published 0.2.1 surface 조사; exact export map + no-pg packed CJS/type/SQL consumer PASS        | next pre-1.0 minor migration note 유지                                 |
 | 2026-09-04 | `OUT-M24`   | `DONE`     | local main `f54a781` working tree                | old handover/spec/plan/SOLID authority banners와 v0.2 status mapping 검토                       | 현재 backlog는 이 문서만 사용                                          |
+| 2026-09-05 | `OUT-M22B` | `BLOCKED` | local `5319d79` → `codex/out-m22bc-dev-audit` working tree | online audit/registry metadata: Prisma 7.10.0 exact pins remain; production 0 | supported Prisma 7 fix 게시 시 재검증; 기존 2026-10-04 예외 만료 유지 |
+| 2026-09-05 | `OUT-M22C` | `DONE` | local `5319d79` → `codex/out-m22bc-dev-audit` working tree | Nest 11.2.3 + compatible Babel/YAML/Express refresh; audit 9 → 4, unit 194/E2E 38 PASS | local 변경 review 및 원격 CI; 남은 advisory는 OUT-M22B |
 
 ### `OUT-M01` 종료 인계
 
@@ -1215,4 +1223,35 @@ Unverified paths and reason: 없음. 문서 링크는 repository-relative path�
 External PR, run, release evidence: 없음. commit/push/PR은 수행하지 않았다.
 Remaining risk: 과거 본문 안의 version/line/example은 의도적으로 당시 기록으로 남아 있으므로 banner를 무시하고 현재 지시로 읽으면 안 된다.
 Next exact action: 새 작업은 이 문서의 READY queue만 사용한다. 다음 lowest READY는 OUT-M22B다.
+```
+
+
+### `OUT-M22B` 종료 인계
+
+```text
+Task: OUT-M22B
+State: BLOCKED
+Start ref / end ref: local main@5319d79 / codex/out-m22bc-dev-audit working tree (uncommitted)
+Changed files: maintenance plan, 2026-09-04 audit report follow-up link, 2026-09-05 audit report 및 online audit/registry JSON artifacts
+Contract / semver decision: stable Prisma 7 최신은 7.10.0이며 CLI/config가 mysql2 3.15.3과 deepmerge-ts 7.1.5를 exact pin한다. npm latest 8.0.0-rc.13, audit 제안 6.19.3 downgrade, out-of-range override는 현재 supported patch 범위를 충족하지 않는다. Prisma 5/6/7 control 및 public peer/API/package version은 유지한다.
+Commands and exact results: npm view prisma@7 version 및 prisma/config dependencies JSON 확보; 첫 RED online full audit 9 (high 6/moderate 1/low 2), C 수정 후 4 high (@prisma/config/deepmerge-ts/mysql2/prisma); npm audit --omit=dev --json 0. Prisma 7 generate와 PostgreSQL E2E 38 PASS.
+Unverified paths and reason: advisory를 제거한 supported Prisma 7 패치가 게시되지 않아 해당 패치의 remediation 검증은 불가능하다. Prisma upstream 대기이며 DONE으로 처리하지 않는다.
+External PR, run, release evidence: npm registry 원본과 SHA-256을 docs/reports/2026-09-05-out-m22bc-audit/metadata.json에 기록했다. fetch 후 remote main은 873f95b, npm latest는 0.2.1로 유지된다. PR/push/release는 수행하지 않았다.
+Remaining risk: 4 high dev-only dependency nodes가 남는다. Owner Outbox maintainers; 기존 예외 만료 2026-10-04 또는 다음 supported patch 중 빠른 시점. 만료 자동 연장 없음.
+Next exact action: supported Prisma 7 수정 버전 게시 시 CLI/client/adapter와 exact controls를 함께 갱신한 후 full/production audit, generate, E2E 및 Prisma 5/6/7 packed controls를 실행한다.
+```
+
+### `OUT-M22C` 종료 인계
+
+```text
+Task: OUT-M22C
+State: DONE
+Start ref / end ref: local main@5319d79 / codex/out-m22bc-dev-audit working tree (uncommitted)
+Changed files: package manifest/lock, CI/release Nest 11 exact control, modern/no-pg packed consumer runners, README/CHANGELOG, audit report 및 JSON artifacts, maintenance plan
+Contract / semver decision: Nest 11 exact control을 11.2.3으로 동기화하고 Jest 29.7.0/ts-jest 29.4.9가 허용하는 js-yaml 3.15.2, Babel core 7.29.7, browserslist 4.28.9, body-parser 2.3.0, qs 6.16.0을 적용했다. Jest major/override 없이 해당 advisory 경로를 제거했다. runtime/API/peer/schema/package semver 변화 없음.
+Commands and exact results: clean npm ci --strict-peer-deps PASS (645 packages); unit/coverage 10 suites/194 tests PASS (S 92.08%, B 83.29%, F 96.64%, L 92.92%); PostgreSQL 16 E2E 1 suite/38 tests PASS; lint/build typecheck/clean/build/compatibility/workflow policy PASS; full online audit 9 → 4 (Prisma only), production 0. same final tgz 134 files/69,779 bytes, SHA-256 ce3432fe4878440dcb7810f747b657053073adf6e8e7cd3b0357cf8e64e3d157: no-pg exports 및 Nest 10/11/12 + Prisma 5/6/7 strict PostgreSQL consumers 모두 PASS; scoped formatting/syntax/YAML/hash/link checks와 git diff --check PASS.
+Unverified paths and reason: remote Node 22/24 Actions는 push 전이라 미실행이다. local 검증 runtime은 Node 24.11.1/npm 11.6.2다.
+External PR, run, release evidence: local disposable loopback PostgreSQL 16과 exact tarball을 사용했다. 선행 29개 commit이 local main에만 있어 현재 5319d79에서 branch를 만들었으며 사용자가 지정한 두 작업을 한 세션에서 진행했다. shared issue claim/commit/push/PR/release는 수행하지 않았다.
+Remaining risk: OUT-M22B의 Prisma CLI dev-only 예외만 남는다. 기존 Nest/Jest 예외는 online audit로 종료했다.
+Next exact action: 변경 review 후 원격 CI에서 갱신된 Nest 11.2.3 tuple과 기존 Node 22/24, Nest 10/12, Prisma 5/6/7 lanes를 확인한다. OUT-M22B는 supported upstream patch 대기다.
 ```

@@ -64,6 +64,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Development NestJS 11 controls now use exact 11.2.3, with compatible
+  Jest/Babel and Express dependency refreshes for reported development-only
+  advisories. Prisma 5/6/7 controls and the production audit-zero gate remain;
+  the Prisma 7 CLI exception awaits an upstream supported fix (OUT-M22B).
 - The package now declares an explicit export map for the CommonJS/type root
   and the documented fresh/current SQL migration paths. Accidental `dist/**`
   and component-migration deep imports are intentionally blocked in the next

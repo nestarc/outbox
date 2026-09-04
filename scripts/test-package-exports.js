@@ -12,8 +12,8 @@ const FIXTURE_DIRECTORY = path.join(
   'fixture',
 );
 const EXACT_DEPENDENCIES = {
-  '@nestjs/common': '11.2.1',
-  '@nestjs/core': '11.2.1',
+  '@nestjs/common': '11.2.3',
+  '@nestjs/core': '11.2.3',
   '@nestjs/schedule': '5.0.1',
   '@prisma/client': '7.10.0',
   'reflect-metadata': '0.2.2',
