@@ -1,0 +1,96 @@
+{
+  "runId": 33933558624,
+  "headSha": "ab420b0b4de0450c665193a31bf98b03511902a4",
+  "url": "https://github.com/nestarc/outbox/actions/runs/33933558624",
+  "status": "completed",
+  "conclusion": "success",
+  "jobs": [
+    {
+      "name": "Lint & type-check",
+      "conclusion": "success",
+      "url": "https://github.com/nestarc/outbox/actions/runs/33933558624/job/101216956385"
+    },
+    {
+      "name": "Node 26 pre-LTS canary (allowed failure)",
+      "conclusion": "success",
+      "url": "https://github.com/nestarc/outbox/actions/runs/33933558624/job/101216956458"
+    },
+    {
+      "name": "Test (Node 24 x NestJS 12.0.1 x Prisma 7.10.0)",
+      "conclusion": "success",
+      "url": "https://github.com/nestarc/outbox/actions/runs/33933558624/job/101217034331"
+    },
+    {
+      "name": "Test (Node 22 x NestJS 10.4.22 x Prisma 6.19.3)",
+      "conclusion": "success",
+      "url": "https://github.com/nestarc/outbox/actions/runs/33933558624/job/101217034342"
+    },
+    {
+      "name": "Test (Node 22 x NestJS 12.0.1 x Prisma 7.10.0)",
+      "conclusion": "success",
+      "url": "https://github.com/nestarc/outbox/actions/runs/33933558624/job/101217034345"
+    },
+    {
+      "name": "Test (Node 22 x NestJS 11.2.3 x Prisma 7.10.0)",
+      "conclusion": "success",
+      "url": "https://github.com/nestarc/outbox/actions/runs/33933558624/job/101217034349"
+    },
+    {
+      "name": "Test (Node 22 x NestJS 10.4.22 x Prisma 5.22.0)",
+      "conclusion": "success",
+      "url": "https://github.com/nestarc/outbox/actions/runs/33933558624/job/101217034368"
+    },
+    {
+      "name": "Test (Node 24 x NestJS 11.2.3 x Prisma 7.10.0)",
+      "conclusion": "success",
+      "url": "https://github.com/nestarc/outbox/actions/runs/33933558624/job/101217034434"
+    },
+    {
+      "name": "Pack (publish dry-run)",
+      "conclusion": "success",
+      "url": "https://github.com/nestarc/outbox/actions/runs/33933558624/job/101217445088"
+    }
+  ],
+  "coverage": {
+    "git": "78a75e5c7c01385c2220bb70e12b6ffc5d9f20b3",
+    "tree": "d72ff5c0b69b6e4e3d8308df16b20ff281fed037",
+    "clean": true,
+    "inputSha256": "4672613f60aff669a0e0e71d4af8218518f780ca991d8430e615606f3bce153d",
+    "runtime": {
+      "node": "v24.20.0",
+      "npm": "11.19.0",
+      "platform": "linux",
+      "arch": "x64",
+      "packages": {
+        "@nestjs/common": "12.0.1",
+        "@nestjs/core": "12.0.1",
+        "@nestjs/schedule": "12.0.1",
+        "@nestjs/testing": "12.0.1",
+        "prisma": "7.10.0",
+        "@prisma/client": "7.10.0",
+        "@prisma/adapter-pg": "7.10.0",
+        "pg": "8.20.0",
+        "jest": "29.7.0",
+        "ts-jest": "29.4.9",
+        "typescript": "5.9.3"
+      }
+    },
+    "ci": {
+      "workflow": "CI",
+      "event": "pull_request",
+      "sha": "78a75e5c7c01385c2220bb70e12b6ffc5d9f20b3",
+      "ref": "refs/pull/18/merge",
+      "runId": "33933558624",
+      "runAttempt": "1"
+    },
+    "reports": {
+      "coverage-final.json": "597899677bd63c4f0c437671d544d5f33f91063bb0dee7fceeb3489daf9ffa19",
+      "coverage-summary.json": "c926477473aeb42efa1c6d68d4dcd7f5e9cc7fce8d8397c1d61d1a273dcacfc8",
+      "lcov.info": "89bb929e65d574e348b826f777ac5e52d55a317b908c48b75de0f2e2f2f36de7",
+      "test-results.json": "9e1a033c2713631a29323f33861c6d9563a577bfae91485e702b6b725e5d0e30"
+    },
+    "inputHashesVerified": true,
+    "reportHashesVerified": true,
+    "passedTests": 212
+  }
+}

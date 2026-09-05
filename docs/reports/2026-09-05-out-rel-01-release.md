@@ -42,7 +42,7 @@ The before-state had no rulesets, no main branch protection, and an unrestricted
   and every mandatory CI lane.
 - [Immutable release tags](https://github.com/nestarc/outbox/rules/22309659):
   block updates and deletion of `v*.*.*` tags, with no bypass actors. The
-  release workflow separately enforces matching version and main ancestry
+  candidate release workflow separately enforces matching version and main ancestry
   before npm publication.
 
 The required CI contexts are lint/typecheck, six Node 22/24 × Nest/Prisma
@@ -126,20 +126,48 @@ These are release-gate fixes, not waived CI failures. The existing tuple
 assertions and real PostgreSQL E2E remain mandatory. The initial manual
 [release dry-run](https://github.com/nestarc/outbox/actions/runs/33933035863)
 uses only contents-read jobs; real publish jobs cannot execute on dispatch.
-The first manual dry-run succeeded. Updated remote results will be recorded
-after the corrected candidate runs.
+The first manual dry-run succeeded; the intermediate run `33933279950` was
+cancelled as superseded so the final corrected commit could run.
+
+## Final remote results
+
+The tested source/tooling commit is
+`ab420b0b4de0450c665193a31bf98b03511902a4`:
+
+- [CI 33933558624](https://github.com/nestarc/outbox/actions/runs/33933558624):
+  **SUCCESS**, all eight required checks plus the optional Node 26 canary.
+  All six required runtime tuples completed their unit, PostgreSQL and
+  applicable packed gates. The PR merge-ref coverage artifact identifies
+  `78a75e5c7c01385c2220bb70e12b6ffc5d9f20b3`, a clean tree, actual Node
+  `24.20.0`/npm `11.19.0`/Nest `12.0.1`/Prisma `7.10.0`, and 212 passed tests.
+  Downloaded input hashes match the local committed inputs and all four
+  downloaded coverage/test report hashes match their metadata.
+- [Release dry-run 33933556228](https://github.com/nestarc/outbox/actions/runs/33933556228):
+  **SUCCESS**, Node 22 source/legacy/packed gates, Node 24 exact-artifact
+  consumers and manual npm publish dry-run. The npm publication, published
+  provenance and GitHub Release jobs were all **skipped**, as required.
+- Downloaded `release-package-ab420b0b4de0450c665193a31bf98b03511902a4-1`
+  passed exact SHA/ref/file-list/SRI verification. Its inner tarball SHA-256 is
+  `56856c21d48199ced25ac7e79899294a0e9ba32fdd75a36bcdb889c33a6dc30c`, identical
+  to the local Node 24 candidate. The surrounding GitHub artifact ZIP has a
+  separate digest; both are recorded in `remote-release.json`.
+
+`remote-ci.json`, `remote-release.json`, and `remote-candidate.json` retain the
+run, installed-runtime and artifact evidence. Subsequent evidence-only document
+commits do not change the tested source, fixtures, workflows or package bytes.
+The verified artifact is from the topic branch; it is not a protected-main tag
+artifact and must not be published as the final release.
 
 ## Remaining release sequence
 
-1. Complete remote CI/manual dry-run against the committed candidate.
-2. Complete the npm environment policy and confirm Trusted Publisher settings;
+1. Complete the npm environment policy and confirm Trusted Publisher settings;
    retain the authenticated evidence before closing OUT-M12.
-3. Review and merge the accumulated prerequisites and 0.3.0 preparation through
+2. Review and merge the accumulated prerequisites and 0.3.0 preparation through
    protected main. Confirm the final CHANGELOG date and successful required CI.
-4. Create the immutable `v0.3.0` tag on that protected release commit. Let the
+3. Create the immutable `v0.3.0` tag on that protected release commit. Let the
    release workflow build and verify its own exact artifact; the designated
    environment reviewer must approve the pending deployment.
-5. Verify registry integrity, npm signatures/provenance and GitHub Release.
+4. Verify registry integrity, npm signatures/provenance and GitHub Release.
    Rerun the same immutable tag workflow and verify identical-byte skip, then
    record the remote artifact digest and close OUT-M21 and OUT-REL-01.
 
