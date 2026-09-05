@@ -271,12 +271,25 @@ function verifyArtifact(tarballPath, metadataPath) {
   return metadata;
 }
 
+function parseNpmView(raw) {
+  const value = JSON.parse(raw);
+  if (!Array.isArray(value)) return value;
+  assert.equal(
+    value.length,
+    1,
+    'exact npm version must return exactly one result',
+  );
+  return value[0];
+}
+
 function npmView(spec, field) {
   try {
-    return execFileSync('npm', ['view', spec, field, '--json'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    }).trim();
+    return parseNpmView(
+      execFileSync('npm', ['view', spec, field, '--json'], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }).trim(),
+    );
   } catch (error) {
     const detail = `${error.stdout || ''}\n${error.stderr || ''}`;
     if (/E404|404 Not Found/.test(detail)) return null;
@@ -292,7 +305,7 @@ function registryCheck(tarballPath, metadataPath) {
     console.log(`${metadata.name}@${metadata.version} is not published`);
     return 'publish';
   }
-  const registryIntegrity = JSON.parse(raw);
+  const registryIntegrity = raw;
   assert.equal(
     registryIntegrity,
     metadata.integrity,
@@ -336,7 +349,7 @@ function verifyPublished(tarballPath, metadataPath, auditPath) {
   const spec = `${metadata.name}@${metadata.version}`;
   const rawDist = npmView(spec, 'dist');
   assert.notEqual(rawDist, null, `${spec} is not published`);
-  const dist = JSON.parse(rawDist);
+  const dist = rawDist;
   assert.equal(dist.integrity, metadata.integrity);
   assert.match(
     dist.attestations?.provenance?.predicateType || '',
@@ -431,6 +444,7 @@ module.exports = {
   decodeStatements,
   inspectArchive,
   packArtifact,
+  parseNpmView,
   registryCheck,
   verifyArtifact,
   verifyPublished,
