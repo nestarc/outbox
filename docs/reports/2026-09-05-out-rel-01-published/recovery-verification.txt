@@ -1,0 +1,8 @@
+v24.15.0
+12.0.2
+
+added 29 packages in 6s
+Verified @nestarc/outbox@0.3.0: sha512-rbPiDgQCNVtQifVf01we+vREYDDwccpezc5cSlaoa8VeIW3NxmGWrMe8ccwQRex/pF2MxlFW4K645SDbN27evQ== (56856c21d48199ced25ac7e79899294a0e9ba32fdd75a36bcdb889c33a6dc30c)
+@nestarc/outbox@0.3.0 already has identical bytes; publish is idempotently skipped
+Verified @nestarc/outbox@0.3.0: sha512-rbPiDgQCNVtQifVf01we+vREYDDwccpezc5cSlaoa8VeIW3NxmGWrMe8ccwQRex/pF2MxlFW4K645SDbN27evQ== (56856c21d48199ced25ac7e79899294a0e9ba32fdd75a36bcdb889c33a6dc30c)
+Verified registry integrity and provenance subject/ref/digest for @nestarc/outbox@0.3.0

@@ -212,7 +212,7 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 |   28 | `OUT-M27`      | P3       | `READY`    | M    | 없음                                                                                 | benchmark harness 복구                                              |
 |   29 | `OUT-M28`      | P3       | `DECISION` | S    | 없음                                                                                 | sourcemap/source packaging 계약                                     |
 |   30 | `OUT-M29`      | P3       | `READY`  | M    | `OUT-M02`, `OUT-M04A–05`, `OUT-M12`, `OUT-M18`                                       | SECURITY/support/operations runbook                                 |
-|   31 | `OUT-M30`      | P3       | `DONE`  | M    | `OUT-M13–14`, `OUT-M21`                                                              | compatibility version manifest와 drift check                        |
+|   31 | `OUT-M30`      | P3       | `READY`  | M    | `OUT-M13–14`, `OUT-M21`                                                              | compatibility version manifest와 drift check                        |
 |   32 | `OUT-M31`      | P3       | `BLOCKED`  | M    | `OUT-M01–11`                                                                         | poller 내부 책임 분리                                               |
 |   33 | `OUT-REL-01`   | release  | `DONE`  | M    | `OUT-M01–03`, `OUT-M04A–B`, `OUT-M05`, `OUT-M09`, `OUT-M12–13`, `OUT-M19`, `OUT-M21` | next version/CHANGELOG/tag/publish                                  |
 |   34 | `TEN-ECO-NEXT` | 외부     | `EXTERNAL` | L    | `OUT-REL-01`, `JOBS-REL-01`                                                          | PostgreSQL Outbox → Redis/BullMQ fully-published crash/restart 검증 |
@@ -842,7 +842,6 @@ Outbox ── durable record / publisher callback ──> Jobs adapter ──> J
 | 2026-09-05 | `OUT-M26` | `DONE` | local `16e9fc2` → `codex/out-m26-critical-coverage` working tree | per-file gate, 212 unit/38 E2E on Nest 11/12, metadata tuple/hash and negative controls PASS | 변경 review 후 원격 CI artifact 확인; 다음 READY는 OUT-M27 |
 
 | 2026-09-05 | `OUT-REL-01` | `BLOCKED` | local `c14e71e` → `codex/out-rel-01-release-0-3-0` | 0.3.0 manifest/migration/CHANGELOG; 212 unit/38 E2E, all exact consumers/dry-run PASS; main/tag rulesets active | remote CI 8개/dry-run PASS; npm 환경 승인자·Trusted Publisher 확인 및 protected tag publish 필요 |
-
 | 2026-09-05 | `OUT-M12` / `OUT-M21` / `OUT-REL-01` | `DONE` | protected release `0e94c8d`, immutable `v0.3.0` | npm 0.3.0 publish; rerun same-byte skip; parser 복구 후 서명/provenance PASS; GitHub Release 생성 | tag 변경 없이 tooling fix/evidence PR 반영; OUT-M29/30 READY |
 
 ### `OUT-M01` 종료 인계
