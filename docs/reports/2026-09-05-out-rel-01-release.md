@@ -112,11 +112,22 @@ previously unexecuted matrix defects:
   unused generation-only probe model, as the packed Prisma 5 fixture already
   does. No production table or package runtime code changes.
 
+The [second CI run](https://github.com/nestarc/outbox/actions/runs/33933282631)
+passed the corrected legacy and Nest 12 lanes, then exposed one cross-step
+artifact lifetime defect. A library `packArtifact()` call wrote its temporary
+consumer paths into `GITHUB_ENV`; cleanup deleted them, so the next README
+consumer failed with `ENOENT`. Only the release CLI now exports workflow-owned
+artifact paths. Library calls remain local to the consumer. A local real-pack
+regression verified an unchanged sentinel environment file after library pack,
+valid CLI-exported paths, successful artifact verification, and identical bytes
+(SHA-256 unchanged). Existing consecutive CI consumers exercise the regression.
+
 These are release-gate fixes, not waived CI failures. The existing tuple
 assertions and real PostgreSQL E2E remain mandatory. The initial manual
 [release dry-run](https://github.com/nestarc/outbox/actions/runs/33933035863)
 uses only contents-read jobs; real publish jobs cannot execute on dispatch.
-Updated remote results will be recorded after the corrected candidate runs.
+The first manual dry-run succeeded. Updated remote results will be recorded
+after the corrected candidate runs.
 
 ## Remaining release sequence
 

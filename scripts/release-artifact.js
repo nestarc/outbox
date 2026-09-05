@@ -229,10 +229,6 @@ function packArtifact(outputDirectory) {
   };
   const metadataPath = path.join(absoluteOutput, 'metadata.json');
   fs.writeFileSync(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`);
-  appendFile('GITHUB_ENV', [
-    `OUTBOX_TGZ=${tarballPath}`,
-    `OUTBOX_TGZ_METADATA=${metadataPath}`,
-  ]);
   console.log(
     `Packed ${metadata.name}@${metadata.version}: ${metadata.integrity} (${metadata.size} bytes, ${metadata.files.length} files)`,
   );
@@ -404,8 +400,16 @@ function usage() {
 
 function main(argv) {
   const [command, ...args] = argv;
-  if (command === 'pack' && args.length === 1) packArtifact(args[0]);
-  else if (command === 'verify' && args.length === 2) {
+  if (command === 'pack' && args.length === 1) {
+    packArtifact(args[0]);
+    // Only the workflow-owned CLI artifact survives for later Actions steps.
+    // Library callers delete their temporary artifacts after consumer tests.
+    const outputDirectory = path.resolve(args[0]);
+    appendFile('GITHUB_ENV', [
+      `OUTBOX_TGZ=${path.join(outputDirectory, 'package.tgz')}`,
+      `OUTBOX_TGZ_METADATA=${path.join(outputDirectory, 'metadata.json')}`,
+    ]);
+  } else if (command === 'verify' && args.length === 2) {
     verifyArtifact(args[0], args[1]);
   } else if (command === 'registry-check' && args.length === 2) {
     registryCheck(args[0], args[1]);
