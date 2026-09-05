@@ -1,20 +1,30 @@
 #!/usr/bin/env node
 /**
  * Packs the current package and proves that an isolated consumer can install
- * and execute it with the exact NestJS 11 / Prisma 7 tuple used by TEN-M21.
+ * and execute it with an exact modern NestJS / Prisma 7 tuple.
+ *
+ * `--nest12` selects the OUT-M14 NestJS 12 control. Before the public peer
+ * decision is adopted, `--candidate-manifest` stages an otherwise identical
+ * package with the proposed Node/NestJS/Schedule ranges so the candidate can
+ * be proved without publishing an unsupported declaration.
  */
 const { execFileSync } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { verifyArtifact } = require('./release-artifact');
 
 const FIXTURE_DIRECTORY = path.join('test', 'modern-consumer', 'fixture');
+const NEST12 = process.argv.includes('--nest12');
+const CANDIDATE_MANIFEST = process.argv.includes('--candidate-manifest');
+const NEST_VERSION = NEST12 ? '12.0.1' : '11.2.3';
+const SCHEDULE_VERSION = NEST12 ? '12.0.1' : '5.0.1';
 const EXACT_DEPENDENCIES = {
-  '@nestjs/common': '11.2.1',
-  '@nestjs/core': '11.2.1',
-  '@nestjs/schedule': '5.0.1',
-  '@nestjs/testing': '11.2.1',
+  '@nestjs/common': NEST_VERSION,
+  '@nestjs/core': NEST_VERSION,
+  '@nestjs/schedule': SCHEDULE_VERSION,
+  '@nestjs/testing': NEST_VERSION,
   '@prisma/adapter-pg': '7.10.0',
   '@prisma/client': '7.10.0',
   pg: '8.20.0',
@@ -23,7 +33,7 @@ const EXACT_DEPENDENCIES = {
   rxjs: '7.8.2',
 };
 const EXACT_DEV_DEPENDENCIES = {
-  '@types/node': '20.19.39',
+  '@types/node': NEST12 ? '22.20.1' : '20.19.39',
   '@types/pg': '8.20.0',
   typescript: '5.9.3',
 };
@@ -49,7 +59,52 @@ function strictInstallEnvironment(temporaryDirectory) {
   };
 }
 
+function stageCandidatePackage(workspaceDirectory, temporaryDirectory) {
+  const candidateDirectory = path.join(temporaryDirectory, 'candidate-package');
+  fs.mkdirSync(candidateDirectory, { recursive: true });
+  for (const entry of ['dist', 'src', 'README.md', 'LICENSE']) {
+    fs.cpSync(
+      path.join(workspaceDirectory, entry),
+      path.join(candidateDirectory, entry),
+      { recursive: true },
+    );
+  }
+
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(workspaceDirectory, 'package.json'), 'utf8'),
+  );
+  manifest.engines.node = '>=22.0.0';
+  manifest.peerDependencies['@nestjs/common'] = '^10.0.0 || ^11.0.0 || ^12.0.0';
+  manifest.peerDependencies['@nestjs/core'] = '^10.0.0 || ^11.0.0 || ^12.0.0';
+  manifest.peerDependencies['@nestjs/schedule'] = '^4.0.0 || ^5.0.0 || ^12.0.0';
+  fs.writeFileSync(
+    path.join(candidateDirectory, 'package.json'),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+  );
+  return candidateDirectory;
+}
+
 function packPackage(workspaceDirectory, temporaryDirectory) {
+  if (process.env.OUTBOX_TGZ || process.env.OUTBOX_TGZ_METADATA) {
+    if (CANDIDATE_MANIFEST) {
+      throw new Error('candidate manifest cannot reuse a release artifact');
+    }
+    if (!process.env.OUTBOX_TGZ || !process.env.OUTBOX_TGZ_METADATA) {
+      throw new Error(
+        'OUTBOX_TGZ and OUTBOX_TGZ_METADATA must be set together',
+      );
+    }
+    const tarballPath = path.resolve(process.env.OUTBOX_TGZ);
+    const metadata = verifyArtifact(
+      tarballPath,
+      path.resolve(process.env.OUTBOX_TGZ_METADATA),
+    );
+    return { path: tarballPath, integrity: metadata.integrity };
+  }
+
+  const packageDirectory = CANDIDATE_MANIFEST
+    ? stageCandidatePackage(workspaceDirectory, temporaryDirectory)
+    : workspaceDirectory;
   const output = execFileSync(
     'npm',
     [
@@ -60,7 +115,7 @@ function packPackage(workspaceDirectory, temporaryDirectory) {
       temporaryDirectory,
     ],
     {
-      cwd: workspaceDirectory,
+      cwd: packageDirectory,
       encoding: 'utf8',
       env: strictInstallEnvironment(temporaryDirectory),
     },
@@ -138,7 +193,10 @@ function assertPackedProvenance(
   if (entry.integrity !== expectedIntegrity) {
     throw new Error('Packed Outbox lock integrity does not match npm pack');
   }
-  if (typeof entry.resolved !== 'string' || !entry.resolved.startsWith('file:')) {
+  if (
+    typeof entry.resolved !== 'string' ||
+    !entry.resolved.startsWith('file:')
+  ) {
     throw new Error('Packed Outbox must resolve from an explicit file tarball');
   }
 
@@ -146,8 +204,7 @@ function assertPackedProvenance(
     ...EXACT_DEPENDENCIES,
     ...EXACT_DEV_DEPENDENCIES,
   })) {
-    const dependencyEntry =
-      lock.packages?.[`node_modules/${packageName}`];
+    const dependencyEntry = lock.packages?.[`node_modules/${packageName}`];
     if (!dependencyEntry) {
       throw new Error(`${packageName} lock entry is missing`);
     }
@@ -206,13 +263,12 @@ function main() {
 
     const env = strictInstallEnvironment(temporaryDirectory);
     console.log(
-      `[modern-consumer] Outbox ${expectedVersion}, NestJS 11.2.1, Prisma 7.10.0`,
+      `[modern-consumer] Outbox ${expectedVersion}, NestJS ${NEST_VERSION}, Schedule ${SCHEDULE_VERSION}, Prisma 7.10.0${CANDIDATE_MANIFEST ? ' (candidate manifest)' : ''}`,
     );
-    run(
-      'npm',
-      ['install', '--strict-peer-deps', '--no-audit', '--no-fund'],
-      { cwd: consumerDirectory, env },
-    );
+    run('npm', ['install', '--strict-peer-deps', '--no-audit', '--no-fund'], {
+      cwd: consumerDirectory,
+      env,
+    });
     assertInstalledVersions(consumerDirectory, expectedVersion);
     assertPackedProvenance(
       consumerDirectory,

@@ -1,4 +1,8 @@
-import { OutboxAdminService } from '../src/outbox.admin.service';
+import {
+  OutboxAdminService,
+  OutboxOperatorService,
+  OutboxTenantAdminService,
+} from '../src/outbox.admin.service';
 import type { OutboxOptions } from '../src/interfaces/outbox-options.interface';
 
 const now = new Date('2026-01-02T03:04:05.000Z');
@@ -12,6 +16,7 @@ function createDbRow(overrides?: Record<string, unknown>) {
     created_at: now,
     updated_at: now,
     processed_at: null,
+    next_attempt_at: now,
     retry_count: 2,
     max_retries: 5,
     last_error: 'handler failed',
@@ -46,6 +51,78 @@ function createService(prisma = createMockPrisma()): {
 }
 
 describe('OutboxAdminService', () => {
+  it.each(['retry', 'markFailed'] as const)(
+    'rejects an unknown %s CAS result instead of claiming success',
+    async (method) => {
+      const { service, prisma } = createService();
+      prisma.$queryRawUnsafe.mockResolvedValue([{ outcome: 'unexpected' }]);
+      await expect(
+        method === 'retry'
+          ? service.retry('evt-1')
+          : service.markFailed('evt-1', 'manual stop'),
+      ).rejects.toThrow('Unknown outbox admin mutation outcome');
+    },
+  );
+
+  it('binds every operator page filter and keeps tenant-scoped pages inside their boundary', async () => {
+    const { service, prisma } = createService();
+    prisma.$queryRawUnsafe.mockResolvedValue([]);
+    const after = new Date('2026-01-01T00:00:00Z');
+    const before = new Date('2026-02-01T00:00:00Z');
+    await service.listPage({
+      status: 'FAILED',
+      eventType: 'order.created',
+      tenantId: 'tenant-a',
+      after,
+      before,
+    });
+    const [sql, ...values] = prisma.$queryRawUnsafe.mock.calls[0];
+    expect(sql).toContain('status = $1');
+    expect(sql).toContain('event_type = $2');
+    expect(sql).toContain('tenant_id = $3');
+    expect(sql).toContain('created_at >= $4');
+    expect(sql).toContain('created_at < $5');
+    expect(values).toEqual([
+      'FAILED',
+      'order.created',
+      'tenant-a',
+      after,
+      before,
+      51,
+    ]);
+    await new OutboxTenantAdminService({ prisma })
+      .forTenant('tenant-b')
+      .listPage();
+    const [tenantSql, ...tenantValues] = prisma.$queryRawUnsafe.mock.calls[1];
+    expect(tenantSql).toContain('tenant_id = $1');
+    expect(tenantValues).toEqual(['tenant-b', 51]);
+  });
+
+  it.each([
+    '',
+    ' ',
+    'e30=',
+    Buffer.from('null').toString('base64url'),
+    ...['invalid', '2026-01-01'].map((createdAt) =>
+      Buffer.from(
+        JSON.stringify({
+          v: 1,
+          order: 'created_at_desc_id_desc',
+          id: '00000000-0000-4000-8000-000000000001',
+          createdAt,
+        }),
+      ).toString('base64url'),
+    ),
+  ])(
+    'rejects noncanonical or invalid-date cursor %j before querying',
+    async (cursor) => {
+      const { service, prisma } = createService();
+      await expect(service.listPage({ cursor })).rejects.toMatchObject({
+        code: 'OUTBOX_INVALID_CURSOR',
+      });
+      expect(prisma.$queryRawUnsafe).not.toHaveBeenCalled();
+    },
+  );
   it('should return status counts and oldest pending/processing ages', async () => {
     const { service, prisma } = createService();
     prisma.$queryRaw.mockResolvedValue([
@@ -67,6 +144,13 @@ describe('OutboxAdminService', () => {
       oldestPendingAgeMs: 5000,
       oldestProcessingAgeMs: null,
     });
+    const [template] = prisma.$queryRaw.mock.calls[0];
+    const sql = template.join('');
+    expect(sql).toContain("FROM outbox_events WHERE status = 'PENDING'");
+    expect(sql).toContain("FROM outbox_events WHERE status = 'PROCESSING'");
+    expect(sql).toContain("FROM outbox_events WHERE status = 'SENT'");
+    expect(sql).toContain("FROM outbox_events WHERE status = 'FAILED'");
+    expect(sql).not.toContain('COUNT(*) FILTER');
   });
 
   it('should default stats to zeros when the aggregate query returns no rows', async () => {
@@ -114,6 +198,7 @@ describe('OutboxAdminService', () => {
       expect.objectContaining({
         id: 'evt-1',
         eventType: 'order.created',
+        nextAttemptAt: now,
         tenantId: 'tenant-1',
         aggregateType: 'Order',
         headers: { source: 'api' },
@@ -136,6 +221,7 @@ describe('OutboxAdminService', () => {
 
     const [sql, ...values] = prisma.$queryRawUnsafe.mock.calls[0];
     expect(sql).not.toContain('WHERE');
+    expect(sql).toContain('ORDER BY created_at DESC, id DESC');
     expect(values).toEqual([500]);
     expect(rows[0]).toEqual(
       expect.objectContaining({
@@ -145,6 +231,48 @@ describe('OutboxAdminService', () => {
         occurredAt: now,
       }),
     );
+  });
+
+  it('should page with an exclusive versioned created_at and id cursor', async () => {
+    const { service, prisma } = createService();
+    const firstId = '00000000-0000-4000-8000-000000000003';
+    const secondId = '00000000-0000-4000-8000-000000000002';
+    prisma.$queryRawUnsafe
+      .mockResolvedValueOnce([
+        createDbRow({ id: firstId }),
+        createDbRow({ id: secondId }),
+      ])
+      .mockResolvedValueOnce([
+        createDbRow({ id: '00000000-0000-4000-8000-000000000001' }),
+      ]);
+
+    const first = await service.listPage({ limit: 1 });
+    expect(first.records.map((record) => record.id)).toEqual([firstId]);
+    expect(first.nextCursor).toEqual(expect.any(String));
+    const [firstSql, ...firstValues] = prisma.$queryRawUnsafe.mock.calls[0];
+    expect(firstSql).toContain('ORDER BY created_at DESC, id DESC');
+    expect(firstValues).toEqual([2]);
+
+    const second = await service.listPage({
+      limit: 1,
+      cursor: first.nextCursor!,
+    });
+    expect(second.records).toHaveLength(1);
+    const [secondSql, ...secondValues] = prisma.$queryRawUnsafe.mock.calls[1];
+    expect(secondSql).toContain('(created_at, id) <');
+    expect(secondValues).toEqual([now, firstId, 2]);
+  });
+
+  it('should reject malformed and unsupported admin cursors', async () => {
+    const { service, prisma } = createService();
+
+    await expect(
+      service.listPage({ cursor: 'not-a-cursor' }),
+    ).rejects.toMatchObject({
+      name: 'OutboxCursorError',
+      code: 'OUTBOX_INVALID_CURSOR',
+    });
+    expect(prisma.$queryRawUnsafe).not.toHaveBeenCalled();
   });
 
   it('should clamp list limit to at least one', async () => {
@@ -187,26 +315,54 @@ describe('OutboxAdminService', () => {
     );
   });
 
-  it('should retry only FAILED records and keep retry_count', async () => {
+  it('should CAS retry only FAILED records and keep retry_count', async () => {
     const { service, prisma } = createService();
-    prisma.$executeRawUnsafe.mockResolvedValue(1);
+    prisma.$queryRawUnsafe.mockResolvedValue([{ outcome: 'applied' }]);
 
-    await expect(service.retry('evt-1')).resolves.toBe(true);
+    await expect(service.retry('evt-1')).resolves.toEqual({
+      outcome: 'applied',
+    });
 
-    const [sql, ...values] = prisma.$executeRawUnsafe.mock.calls[0];
+    const [sql, ...values] = prisma.$queryRawUnsafe.mock.calls[0];
+    expect(sql).toContain('WITH target AS MATERIALIZED');
     expect(sql).toContain("status = 'PENDING'");
     expect(sql).toContain('last_error = NULL');
+    expect(sql).toContain('processed_at = NULL');
+    expect(sql).toContain('next_attempt_at = NOW()');
     expect(sql).toContain('WHERE id = $1::uuid');
-    expect(sql).toContain('status = $2');
+    expect(sql).toContain('current.status = $2');
+    expect(sql).toContain("'lost_claim'");
     expect(sql).not.toContain('retry_count = 0');
     expect(values).toEqual(['evt-1', 'FAILED']);
   });
 
-  it('should return false when retry updates no rows', async () => {
-    const { service, prisma } = createService();
-    prisma.$executeRawUnsafe.mockResolvedValue(0);
+  it.each(['not_found', 'conflict', 'lost_claim'] as const)(
+    'should return %s when retry does not apply',
+    async (outcome) => {
+      const { service, prisma } = createService();
+      prisma.$queryRawUnsafe.mockResolvedValue([
+        {
+          outcome,
+          current_status: outcome === 'conflict' ? 'PROCESSING' : null,
+        },
+      ]);
 
-    await expect(service.retry('evt-1')).resolves.toBe(false);
+      await expect(service.retry('evt-1')).resolves.toEqual(
+        outcome === 'conflict'
+          ? { outcome, currentStatus: 'PROCESSING' }
+          : { outcome },
+      );
+    },
+  );
+
+  it('should reject CAS mutations when prisma lacks $queryRawUnsafe', async () => {
+    const service = new OutboxAdminService({
+      prisma: { $queryRaw: jest.fn(), $executeRaw: jest.fn() },
+    });
+
+    await expect(service.retry('evt-1')).rejects.toThrow(
+      'OutboxAdminService requires prisma.$queryRawUnsafe',
+    );
   });
 
   it('should reject dynamic updates when prisma lacks $executeRawUnsafe', async () => {
@@ -214,7 +370,7 @@ describe('OutboxAdminService', () => {
       prisma: { $queryRaw: jest.fn(), $executeRaw: jest.fn() },
     });
 
-    await expect(service.retry('evt-1')).rejects.toThrow(
+    await expect(service.retryMany(['evt-1'])).rejects.toThrow(
       'OutboxAdminService requires prisma.$executeRawUnsafe',
     );
   });
@@ -228,7 +384,48 @@ describe('OutboxAdminService', () => {
     const [sql, ...values] = prisma.$executeRawUnsafe.mock.calls[0];
     expect(sql).toContain('id IN ($1::uuid, $2::uuid)');
     expect(sql).toContain('status = $3');
+    expect(sql).toContain('processed_at = NULL');
+    expect(sql).toContain('next_attempt_at = NOW()');
     expect(values).toEqual(['evt-1', 'evt-2', 'FAILED']);
+  });
+
+  it('should deduplicate and chunk retryMany below the bind limit', async () => {
+    const { service, prisma } = createService();
+    const ids = Array.from(
+      { length: 10_001 },
+      (_, index) =>
+        `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+    );
+    prisma.$executeRawUnsafe
+      .mockResolvedValueOnce(10_000)
+      .mockResolvedValueOnce(1);
+
+    await expect(service.retryMany([...ids, ids[0]])).resolves.toBe(10_001);
+
+    expect(prisma.$executeRawUnsafe).toHaveBeenCalledTimes(2);
+    const [firstSql, ...firstValues] = prisma.$executeRawUnsafe.mock.calls[0];
+    const [secondSql, ...secondValues] = prisma.$executeRawUnsafe.mock.calls[1];
+    expect(firstSql).toContain('status = $10001');
+    expect(firstValues).toHaveLength(10_001);
+    expect(secondSql).toContain('id IN ($1::uuid)');
+    expect(secondValues).toEqual([ids[10_000], 'FAILED']);
+  });
+
+  it('documents retryMany partial failure as retry-safe independent chunks', async () => {
+    const { service, prisma } = createService();
+    const ids = Array.from(
+      { length: 10_001 },
+      (_, index) =>
+        `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+    );
+    prisma.$executeRawUnsafe
+      .mockResolvedValueOnce(10_000)
+      .mockRejectedValueOnce(new Error('database unavailable'));
+
+    await expect(service.retryMany(ids)).rejects.toThrow(
+      'database unavailable',
+    );
+    expect(prisma.$executeRawUnsafe).toHaveBeenCalledTimes(2);
   });
 
   it('should no-op retryMany for empty ids', async () => {
@@ -238,24 +435,43 @@ describe('OutboxAdminService', () => {
     expect(prisma.$executeRawUnsafe).not.toHaveBeenCalled();
   });
 
-  it('should mark a record as failed with a reason', async () => {
+  it('should CAS mark only PENDING records as failed with terminal invariants', async () => {
     const { service, prisma } = createService();
-    prisma.$executeRawUnsafe.mockResolvedValue(1);
+    prisma.$queryRawUnsafe.mockResolvedValue([{ outcome: 'applied' }]);
 
-    await expect(service.markFailed('evt-1', 'manual stop')).resolves.toBe(true);
+    await expect(service.markFailed('evt-1', 'manual stop')).resolves.toEqual({
+      outcome: 'applied',
+    });
 
-    const [sql, ...values] = prisma.$executeRawUnsafe.mock.calls[0];
+    const [sql, ...values] = prisma.$queryRawUnsafe.mock.calls[0];
+    expect(sql).toContain('WITH target AS MATERIALIZED');
     expect(sql).toContain("status = 'FAILED'");
     expect(sql).toContain('last_error = $2');
+    expect(sql).toContain('processed_at = NOW()');
+    expect(sql).toContain('next_attempt_at = NULL');
+    expect(sql).toContain("current.status = 'PENDING'");
+    expect(sql).not.toContain("current.status = 'PROCESSING'");
     expect(values).toEqual(['evt-1', 'manual stop']);
   });
 
-  it('should return false when markFailed updates no rows', async () => {
-    const { service, prisma } = createService();
-    prisma.$executeRawUnsafe.mockResolvedValue(0);
+  it.each(['not_found', 'conflict', 'lost_claim'] as const)(
+    'should return %s when markFailed does not apply',
+    async (outcome) => {
+      const { service, prisma } = createService();
+      prisma.$queryRawUnsafe.mockResolvedValue([
+        {
+          outcome,
+          current_status: outcome === 'conflict' ? 'PROCESSING' : null,
+        },
+      ]);
 
-    await expect(service.markFailed('evt-1', 'manual stop')).resolves.toBe(false);
-  });
+      await expect(service.markFailed('evt-1', 'manual stop')).resolves.toEqual(
+        outcome === 'conflict'
+          ? { outcome, currentStatus: 'PROCESSING' }
+          : { outcome },
+      );
+    },
+  );
 
   it('should purge only SENT rows older than the cutoff', async () => {
     const { service, prisma } = createService();
@@ -323,4 +539,95 @@ describe('OutboxAdminService', () => {
       reasons: [],
     });
   });
+});
+
+describe('tenant admin boundary', () => {
+  it('keeps OutboxAdminService as the privileged operator compatibility alias', () => {
+    expect(OutboxAdminService).toBe(OutboxOperatorService);
+  });
+
+  it('adds the expected tenant predicate to every tenant-facing read', async () => {
+    const prisma = createMockPrisma();
+    const tenantAdmin = new OutboxTenantAdminService({ prisma });
+    const scoped = tenantAdmin.forTenant('tenant-a');
+    prisma.$queryRawUnsafe
+      .mockResolvedValueOnce([createDbRow({ tenant_id: 'tenant-a' })])
+      .mockResolvedValueOnce([createDbRow({ tenant_id: 'tenant-a' })])
+      .mockResolvedValueOnce([
+        {
+          pending: 1,
+          processing: 0,
+          sent: 0,
+          failed: 0,
+          oldest_pending_age_ms: 100,
+          oldest_processing_age_ms: null,
+        },
+      ]);
+
+    await scoped.list({ status: 'PENDING' });
+    await scoped.getById('evt-a');
+    await scoped.getStats();
+
+    const [listSql, ...listValues] = prisma.$queryRawUnsafe.mock.calls[0];
+    expect(listSql).toContain('tenant_id = $1');
+    expect(listSql).toContain('status = $2');
+    expect(listValues).toEqual(['tenant-a', 'PENDING', 50]);
+
+    const [getSql, ...getValues] = prisma.$queryRawUnsafe.mock.calls[1];
+    expect(getSql).toContain('id = $1::uuid');
+    expect(getSql).toContain('tenant_id = $2');
+    expect(getValues).toEqual(['evt-a', 'tenant-a']);
+
+    const [statsSql, ...statsValues] = prisma.$queryRawUnsafe.mock.calls[2];
+    expect(statsSql).toContain('WHERE tenant_id = $1');
+    expect(statsValues).toEqual(['tenant-a']);
+  });
+
+  it('adds the expected tenant predicate to every tenant-facing mutation', async () => {
+    const prisma = createMockPrisma();
+    const scoped = new OutboxTenantAdminService({ prisma }).forTenant(
+      'tenant-a',
+    );
+    prisma.$queryRawUnsafe
+      .mockResolvedValueOnce([{ outcome: 'applied' }])
+      .mockResolvedValueOnce([{ outcome: 'applied' }]);
+    prisma.$executeRawUnsafe.mockResolvedValueOnce(1).mockResolvedValueOnce(1);
+
+    await scoped.retry('evt-a');
+    await scoped.markFailed('evt-a', 'operator stop');
+    await scoped.retryMany(['evt-a', 'evt-b']);
+    await scoped.purgeSent({ before: now, limit: 10 });
+
+    const [retrySql, ...retryValues] = prisma.$queryRawUnsafe.mock.calls[0];
+    expect(retrySql).toContain('tenant_id = $3');
+    expect(retrySql).toContain('current.tenant_id = $3');
+    expect(retryValues).toEqual(['evt-a', 'FAILED', 'tenant-a']);
+
+    const [failedSql, ...failedValues] = prisma.$queryRawUnsafe.mock.calls[1];
+    expect(failedSql).toContain('tenant_id = $3');
+    expect(failedSql).toContain('current.tenant_id = $3');
+    expect(failedValues).toEqual(['evt-a', 'operator stop', 'tenant-a']);
+
+    const [manySql, ...manyValues] = prisma.$executeRawUnsafe.mock.calls[0];
+    expect(manySql).toContain('tenant_id = $4');
+    expect(manyValues).toEqual(['evt-a', 'evt-b', 'FAILED', 'tenant-a']);
+
+    const [purgeSql, ...purgeValues] = prisma.$executeRawUnsafe.mock.calls[1];
+    expect(purgeSql).toContain('tenant_id = $3');
+    expect(purgeValues).toEqual([now, 10, 'tenant-a']);
+  });
+
+  it.each([undefined, null, 42, '', ' ', ' tenant-a', 'tenant-a '])(
+    'rejects invalid tenant admin scope %p before SQL',
+    (tenantId) => {
+      const prisma = createMockPrisma();
+      const tenantAdmin = new OutboxTenantAdminService({ prisma });
+
+      expect(() => tenantAdmin.forTenant(tenantId as string)).toThrow(
+        'Outbox tenant admin scope requires a non-empty canonical tenant id',
+      );
+      expect(prisma.$queryRawUnsafe).not.toHaveBeenCalled();
+      expect(prisma.$executeRawUnsafe).not.toHaveBeenCalled();
+    },
+  );
 });

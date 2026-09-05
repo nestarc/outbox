@@ -10,6 +10,8 @@ import {
   OutboxEmitter,
   OutboxEvent,
   OutboxModule,
+  OutboxOperatorService,
+  OutboxTenantAdminService,
   type OutboxHandlerContext,
 } from '@nestarc/outbox';
 import { PrismaClient } from '../generated/client';
@@ -39,9 +41,14 @@ class ModernConsumerListener {
 }
 
 function migrationStatements(): string[] {
-  const migrationPath = require.resolve(
-    '@nestarc/outbox/src/sql/create-outbox-table.sql',
+  const upgradePath =
+    require.resolve('@nestarc/outbox/src/sql/upgrade-to-current.sql');
+  assert.match(
+    fs.readFileSync(upgradePath, 'utf8'),
+    /ADD COLUMN IF NOT EXISTS claim_token/,
   );
+  const migrationPath =
+    require.resolve('@nestarc/outbox/src/sql/create-outbox-table.sql');
   return fs
     .readFileSync(migrationPath, 'utf8')
     .replace(/^\s*--.*$/gm, '')
@@ -91,6 +98,10 @@ async function main(): Promise<void> {
           prisma,
           polling: { enabled: true, interval: 50, batchSize: 10 },
           retry: { maxRetries: 3, backoff: 'fixed', initialDelay: 50 },
+          tenancy: {
+            policy: 'require-match',
+            provider: { getTenantId: () => 'tenant-modern' },
+          },
         }),
       ],
       providers: [ModernConsumerListener],
@@ -100,6 +111,16 @@ async function main(): Promise<void> {
     const emitter = moduleRef.get(OutboxEmitter);
     const listener = moduleRef.get(ModernConsumerListener);
     const admin = moduleRef.get(OutboxAdminService);
+    const operator = moduleRef.get(OutboxOperatorService);
+    const tenantAdmin = moduleRef
+      .get(OutboxTenantAdminService)
+      .forTenant('tenant-modern');
+    assert.equal(admin, operator);
+
+    if (false) {
+      // @ts-expect-error A tenant scope cannot be overridden per query.
+      await tenantAdmin.list({ tenantId: 'tenant-other' });
+    }
 
     await prisma.$transaction(async (tx) => {
       await emitter.emit(tx, new ModernConsumerEvent('prisma-7'), {
@@ -124,6 +145,9 @@ async function main(): Promise<void> {
     const stats = await admin.getStats();
     assert.equal(stats.sent, 1);
     assert.equal(stats.pending, 0);
+    const tenantStats = await tenantAdmin.getStats();
+    assert.equal(tenantStats.sent, 1);
+    assert.equal(tenantStats.pending, 0);
 
     await assert.rejects(
       prisma.$transaction(async (tx) => {

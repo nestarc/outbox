@@ -1,20 +1,20 @@
 name: Release
 
 # Publishes @nestarc/outbox to npm when a tag matching `v*.*.*` is
-# pushed, or when the workflow is dispatched manually (emergency fallback).
+# pushed. Manual dispatch always runs the verification and npm dry-run only.
 #
 # Flow:
 #   1. verify job reads package.json version and confirms it matches the tag.
-#   2. build-and-test runs the prepublishOnly chain, the exact modern
-#      NestJS 11 / Prisma 7 PostgreSQL gates, then the preserved legacy
-#      NestJS 10 / Prisma 6 unit and PostgreSQL runtime lane.
-#   3. publish runs `npm publish --provenance --access public` through npm
-#      Trusted Publishing and creates a GitHub Release with the CHANGELOG
-#      excerpt.
+#   2. build-and-test runs the Node 22 prepublish chain, packs exactly once,
+#      verifies the allowlist/SRI, and tests every Node 22 consumer against it.
+#   3. compatibility-node24 downloads and tests those exact tarball bytes.
+#   4. tag-only jobs publish that tarball through Trusted Publishing, then
+#      verify registry integrity and the signed provenance subject/ref/digest.
+#   5. a separate tag-only job creates the GitHub Release with contents write.
 #
 # Permissions:
-#   - id-token: write is required for npm Trusted Publishing/OIDC.
-#   - contents: write is required to create the GitHub Release.
+#   - publish-npm receives contents read + id-token write, never contents write.
+#   - github-release receives contents write, never id-token write.
 #
 # npm Trusted Publisher settings:
 #   - Publisher: GitHub Actions
@@ -35,11 +35,6 @@ on:
     tags:
       - 'v*.*.*'
   workflow_dispatch:
-    inputs:
-      dry_run:
-        description: 'Run the full pipeline but skip the actual npm publish (default: false)'
-        type: boolean
-        default: false
 
 concurrency:
   group: release-${{ github.ref }}
@@ -52,16 +47,20 @@ jobs:
   verify:
     name: Verify tag matches package.json
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       version: ${{ steps.read.outputs.version }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
 
       - name: Read package version
@@ -71,23 +70,38 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "package.json version: $VERSION"
 
-      - name: Ensure git tag matches package.json (tag-push only)
+      - name: Authorize immutable release ref
         if: github.event_name == 'push'
         env:
           GIT_REF_NAME: ${{ github.ref_name }}
+          GIT_REF_TYPE: ${{ github.ref_type }}
+          RELEASE_SHA: ${{ github.sha }}
           PKG_VERSION: ${{ steps.read.outputs.version }}
         run: |
+          test "$GIT_REF_TYPE" = "tag"
+          case "$GIT_REF_NAME" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::Release ref must be an exact v*.*.* tag"; exit 1 ;;
+          esac
           TAG_VERSION="${GIT_REF_NAME#v}"
           if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
             echo "::error::Tag $GIT_REF_NAME does not match package.json version $PKG_VERSION"
             exit 1
           fi
-          echo "Tag $GIT_REF_NAME matches package.json $PKG_VERSION"
+          test "$(git rev-list -n 1 "$GIT_REF_NAME")" = "$RELEASE_SHA"
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$RELEASE_SHA" refs/remotes/origin/main; then
+            echo "::error::Release tag must point to a commit on protected main"
+            exit 1
+          fi
+          echo "Tag $GIT_REF_NAME matches package.json and protected main ancestry"
 
   build-and-test:
     name: Full prepublishOnly chain
     needs: verify
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     services:
       postgres:
@@ -106,13 +120,15 @@ jobs:
 
     env:
       DATABASE_URL: postgresql://test:test@localhost:5433/outbox_test
+      OUTBOX_TGZ: ${{ github.workspace }}/release-artifact/package.tgz
+      OUTBOX_TGZ_METADATA: ${{ github.workspace }}/release-artifact/metadata.json
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
           cache: npm
@@ -124,11 +140,49 @@ jobs:
       - name: Clean + lint + unit test + build
         run: npm run prepublishOnly
 
+      - name: Compatibility policy
+        run: npm run test:compatibility-policy
+
+      - name: Workflow policy
+        run: npm run test:workflow-policy
+
+      - name: Production dependency audit
+        run: npm run audit:production
+
       - name: Prisma 7.10.0 PostgreSQL E2E
         run: npm run test:e2e
 
-      - name: Strict packed NestJS 11.2.1 + Prisma 7.10.0 consumer
+      - name: Critical unit coverage gate
+        run: npm run test:cov
+
+      - name: Upload critical coverage evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-${{ github.sha }}-node22-locked-runtime-${{ github.run_attempt }}
+          path: coverage/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Pack and verify the release artifact once
+        run: node scripts/release-artifact.js pack release-artifact
+
+      - name: Strict packed README examples with and without optional pg
+        run: node scripts/test-packed-examples.js
+
+      - name: Strict packed package exports consumer without optional pg
+        run: node scripts/test-package-exports.js
+
+      - name: Strict packed NestJS 11.2.3 + Prisma 7.10.0 consumer
         run: npm run test:modern-consumer
+
+      - name: Strict packed NestJS 12.0.1 + Schedule 12.0.1 + Prisma 7.10.0 consumer
+        run: npm run test:nest12-consumer
+
+      - name: Strict packed NestJS 10.4.22 + Prisma 5.22.0 consumer
+        run: npm run test:prisma5-consumer
+
+      - name: Strict packed NestJS 10.4.22 + Prisma 6.19.3 consumer
+        run: npm run test:prisma6-consumer
 
       - name: Install exact legacy NestJS 10.4.22 + Prisma 6.19.3 tuple
         run: |
@@ -158,58 +212,196 @@ jobs:
       - name: Legacy Prisma 6.19.3 PostgreSQL E2E
         run: npm run test:e2e
 
-      - name: Pack (dry run)
-        run: npm pack --dry-run
+      - name: Re-verify exact release artifact after all gates
+        run: node scripts/release-artifact.js verify "$OUTBOX_TGZ" "$OUTBOX_TGZ_METADATA"
 
-      - name: Upload dist artifact
-        uses: actions/upload-artifact@v4
+      - name: Upload exact release artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: release-dist
-          path: |
-            dist/
-            package.json
-            README.md
-            LICENSE
+          name: release-package-${{ github.sha }}-${{ github.run_attempt }}
+          path: release-artifact/
           if-no-files-found: error
           retention-days: 14
 
-  publish:
-    name: Publish to npm
+  compatibility-node24:
+    name: Node 24 + NestJS 12 compatibility
     needs: [verify, build-and-test]
     runs-on: ubuntu-latest
-    environment: npm
     permissions:
-      contents: write
-      id-token: write
+      contents: read
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: outbox_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d outbox_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://test:test@localhost:5433/outbox_test
+      OUTBOX_TGZ: ${{ github.workspace }}/release-artifact/package.tgz
+      OUTBOX_TGZ_METADATA: ${{ github.workspace }}/release-artifact/metadata.json
+
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Node 24
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+
+      - name: Download exact release artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-package-${{ github.sha }}-${{ github.run_attempt }}
+          path: release-artifact
+
+      - name: Verify exact release artifact
+        run: node scripts/release-artifact.js verify "$OUTBOX_TGZ" "$OUTBOX_TGZ_METADATA"
+
+      - name: Strict packed README examples with and without optional pg
+        run: node scripts/test-packed-examples.js
+
+      - name: Strict packed NestJS 12.0.1 + Schedule 12.0.1 + Prisma 7.10.0 consumer
+        run: node scripts/test-modern-consumer.js --nest12
+
+  manual-dry-run:
+    name: Manual npm publish dry-run
+    if: github.event_name == 'workflow_dispatch'
+    needs: [verify, build-and-test, compatibility-node24]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      OUTBOX_TGZ: ${{ github.workspace }}/release-artifact/package.tgz
+      OUTBOX_TGZ_METADATA: ${{ github.workspace }}/release-artifact/metadata.json
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Setup Node with npm registry
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '24'
           registry-url: https://registry.npmjs.org
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Download exact release artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-package-${{ github.sha }}-${{ github.run_attempt }}
+          path: release-artifact
+
+      - name: Verify exact release artifact
+        run: node scripts/release-artifact.js verify "$OUTBOX_TGZ" "$OUTBOX_TGZ_METADATA"
+
+      - name: Publish dry-run
+        run: npm publish "$OUTBOX_TGZ" --ignore-scripts --access public --dry-run
+
+  publish-npm:
+    name: Publish to npm
+    if: github.event_name == 'push'
+    needs: [verify, build-and-test, compatibility-node24]
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      OUTBOX_TGZ: ${{ github.workspace }}/release-artifact/package.tgz
+      OUTBOX_TGZ_METADATA: ${{ github.workspace }}/release-artifact/metadata.json
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Node with npm registry
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
 
       - name: Show npm version
         run: npm --version
 
-      - name: Build
-        run: npm run build
+      - name: Download exact release artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-package-${{ github.sha }}-${{ github.run_attempt }}
+          path: release-artifact
 
-      - name: Publish (dry run)
-        if: github.event_name == 'workflow_dispatch' && inputs.dry_run == true
-        run: npm publish --provenance --access public --dry-run
+      - name: Verify exact release artifact
+        run: node scripts/release-artifact.js verify "$OUTBOX_TGZ" "$OUTBOX_TGZ_METADATA"
+
+      - name: Check whether this exact version already exists
+        id: registry
+        run: node scripts/release-artifact.js registry-check "$OUTBOX_TGZ" "$OUTBOX_TGZ_METADATA"
 
       - name: Publish
-        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.dry_run != true)
-        run: npm publish --provenance --access public
+        if: steps.registry.outputs.action == 'publish'
+        run: npm publish "$OUTBOX_TGZ" --ignore-scripts --provenance --access public
+
+  verify-published:
+    name: Verify published integrity and provenance
+    if: github.event_name == 'push'
+    needs: [verify, publish-npm]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      OUTBOX_TGZ: ${{ github.workspace }}/release-artifact/package.tgz
+      OUTBOX_TGZ_METADATA: ${{ github.workspace }}/release-artifact/metadata.json
+      PACKAGE_SPEC: '@nestarc/outbox@${{ needs.verify.outputs.version }}'
+    steps:
+      - name: Checkout verification code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Node with npm registry
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.15.0'
+          registry-url: https://registry.npmjs.org
+
+      - name: Download exact release artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-package-${{ github.sha }}-${{ github.run_attempt }}
+          path: release-artifact
+
+      - name: Verify exact release artifact
+        run: node scripts/release-artifact.js verify "$OUTBOX_TGZ" "$OUTBOX_TGZ_METADATA"
+
+      - name: Install published package and verify npm signatures
+        run: |
+          npm install --global npm@12.0.2
+          AUDIT_DIR=$(mktemp -d)
+          cd "$AUDIT_DIR"
+          npm init --yes
+          npm install --ignore-scripts --no-audit --no-fund "$PACKAGE_SPEC"
+          npm audit signatures --json --include-attestations > "$GITHUB_WORKSPACE/release-artifact/attestation-audit.json"
+
+      - name: Verify registry integrity and provenance subject/ref/digest
+        run: node scripts/release-artifact.js verify-published "$OUTBOX_TGZ" "$OUTBOX_TGZ_METADATA" release-artifact/attestation-audit.json
+
+  github-release:
+    name: Create GitHub Release
+    if: github.event_name == 'push'
+    needs: [verify, verify-published]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Extract CHANGELOG entry for this version
-        if: github.event_name == 'push'
         id: changelog
         env:
           VERSION: ${{ needs.verify.outputs.version }}
@@ -229,8 +421,7 @@ jobs:
           echo "body-file=release-body.md" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
-        if: github.event_name == 'push'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}

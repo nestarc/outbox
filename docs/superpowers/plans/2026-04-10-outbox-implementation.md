@@ -1,5 +1,12 @@
 # @nestarc/outbox v0.1.0 Implementation Plan
 
+> [!IMPORTANT]
+> **HISTORICAL / COMPLETED / SUPERSEDED.** v0.1.0 구현 당시의 실행 계획이며
+> 미체크 박스도 현재 backlog가 아니다. 현재 계약은 루트
+> [`README.md`](../../../README.md), 현재 작업 상태는
+> [`2026-09-02-p0-p4-maintenance-work-plan.md`](../../2026-09-02-p0-p4-maintenance-work-plan.md)를
+> 따른다.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a Prisma-native transactional outbox library for NestJS with polling delivery, retry with backoff, and a transport interface for future extensibility.

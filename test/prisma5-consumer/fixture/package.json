@@ -1,0 +1,11 @@
+{
+  "name": "@nestarc/outbox-prisma5-consumer-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "prisma:generate": "prisma generate --schema prisma/schema.prisma",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "smoke": "node dist/src/smoke.js"
+  }
+}

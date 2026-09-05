@@ -18,6 +18,20 @@ export interface OutboxListOptions {
   after?: Date;
 }
 
+export type OutboxTenantListOptions = Omit<OutboxListOptions, 'tenantId'>;
+
+export interface OutboxPageOptions extends OutboxListOptions {
+  /** Opaque exclusive continuation cursor returned by a previous page. */
+  cursor?: string;
+}
+
+export type OutboxTenantPageOptions = Omit<OutboxPageOptions, 'tenantId'>;
+
+export interface OutboxListPage {
+  records: OutboxRecord[];
+  nextCursor: string | null;
+}
+
 export interface OutboxHealthOptions {
   maxOldestPendingAgeMs?: number;
   maxFailedCount?: number;
@@ -28,3 +42,12 @@ export interface OutboxHealth {
   stats: OutboxStats;
   reasons: string[];
 }
+
+export type OutboxAdminMutationResult =
+  | { outcome: 'applied' }
+  | { outcome: 'not_found' }
+  | {
+      outcome: 'conflict';
+      currentStatus: OutboxRecord['status'];
+    }
+  | { outcome: 'lost_claim' };

@@ -3,9 +3,39 @@ export { OutboxModule } from './outbox.module';
 
 // Core
 export { OutboxEvent } from './outbox.event';
-export { OutboxAdminService } from './outbox.admin.service';
+export {
+  OutboxAdminService,
+  OutboxOperatorService,
+  OutboxTenantAdminService,
+} from './outbox.admin.service';
 export { OutboxEmitter } from './outbox.emitter';
 export { OutboxListener } from './outbox.listener';
+export {
+  OUTBOX_INVALID_CURSOR,
+  OutboxCursorError,
+} from './errors/outbox-cursor.error';
+export {
+  OUTBOX_INVALID_ENVELOPE,
+  OutboxEnvelopeError,
+} from './errors/outbox-envelope.error';
+export type { OutboxEnvelopeErrorReason } from './errors/outbox-envelope.error';
+export {
+  OUTBOX_INVALID_CONFIGURATION,
+  OutboxConfigurationError,
+} from './errors/outbox-configuration.error';
+export {
+  OUTBOX_PERSISTED_INVARIANT_VIOLATION,
+  OutboxPersistedInvariantError,
+} from './errors/outbox-persisted-invariant.error';
+export {
+  OUTBOX_WAKEUP_UNAVAILABLE,
+  OutboxWakeupUnavailableError,
+} from './errors/outbox-wakeup-unavailable.error';
+export {
+  OUTBOX_SCHEMA_MISMATCH,
+  OutboxSchemaError,
+} from './errors/outbox-schema.error';
+export { REQUIRED_OUTBOX_SCHEMA_VERSION } from './outbox.schema';
 export { OnOutboxEvent } from './outbox.decorator';
 
 // Transport
@@ -24,15 +54,22 @@ export type {
   OutboxHealth,
   OutboxHealthOptions,
   OutboxListOptions,
+  OutboxListPage,
+  OutboxAdminMutationResult,
+  OutboxPageOptions,
   OutboxStats,
+  OutboxTenantListOptions,
+  OutboxTenantPageOptions,
 } from './interfaces/outbox-admin.interface';
 export type {
   OutboxOptions,
   OutboxAsyncOptions,
+  OutboxAsyncRuntimeOptions,
   OutboxOptionsFactory,
   OutboxPollingOptions,
   OutboxRetryOptions,
   OutboxDeliveryOptions,
+  OutboxLeaseOptions,
 } from './interfaces/outbox-options.interface';
 export type {
   OutboxEmitManyEntry,
@@ -48,6 +85,7 @@ export type {
 export type { OutboxHandlerContext } from './interfaces/outbox-handler-context.interface';
 export type { OutboxRecord } from './interfaces/outbox-record.interface';
 export type {
+  OutboxTenantPolicy,
   OutboxTenancyOptions,
   OutboxTenantProvider,
 } from './interfaces/outbox-tenancy.interface';

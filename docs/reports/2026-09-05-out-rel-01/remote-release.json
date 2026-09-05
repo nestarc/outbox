@@ -1,0 +1,51 @@
+{
+  "databaseId": 33933556228,
+  "headSha": "ab420b0b4de0450c665193a31bf98b03511902a4",
+  "url": "https://github.com/nestarc/outbox/actions/runs/33933556228",
+  "status": "completed",
+  "conclusion": "success",
+  "jobs": [
+    {
+      "name": "Verify tag matches package.json",
+      "conclusion": "success",
+      "url": "https://github.com/nestarc/outbox/actions/runs/33933556228/job/101217109440"
+    },
+    {
+      "name": "Full prepublishOnly chain",
+      "conclusion": "success",
+      "url": "https://github.com/nestarc/outbox/actions/runs/33933556228/job/101217125097"
+    },
+    {
+      "name": "Node 24 + NestJS 12 compatibility",
+      "conclusion": "success",
+      "url": "https://github.com/nestarc/outbox/actions/runs/33933556228/job/101217872860"
+    },
+    {
+      "name": "Manual npm publish dry-run",
+      "conclusion": "success",
+      "url": "https://github.com/nestarc/outbox/actions/runs/33933556228/job/101218131833"
+    },
+    {
+      "name": "Publish to npm",
+      "conclusion": "skipped",
+      "url": "https://github.com/nestarc/outbox/actions/runs/33933556228/job/101218132570"
+    },
+    {
+      "name": "Verify published integrity and provenance",
+      "conclusion": "skipped",
+      "url": "https://github.com/nestarc/outbox/actions/runs/33933556228/job/101218133187"
+    },
+    {
+      "name": "Create GitHub Release",
+      "conclusion": "skipped",
+      "url": "https://github.com/nestarc/outbox/actions/runs/33933556228/job/101218133232"
+    }
+  ],
+  "artifact": {
+    "name": "release-package-ab420b0b4de0450c665193a31bf98b03511902a4-1",
+    "githubZipDigest": "sha256:e5354a839996e5f2b4ea68a0ea38bd3f73088208993c68e1edb1a24651ad006f",
+    "tarballSha256": "56856c21d48199ced25ac7e79899294a0e9ba32fdd75a36bcdb889c33a6dc30c",
+    "downloadedAndVerified": true,
+    "matchesLocalTarball": true
+  }
+}

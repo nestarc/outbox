@@ -48,4 +48,14 @@ describe('@OnOutboxEvent', () => {
       }
     }).toThrow('NoEventTypeEvent must define static readonly eventType');
   });
+
+  it('should reject duplicate event entries in one decorator', () => {
+    expect(() => {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      class TestHandler {
+        @OnOutboxEvent(OrderCreatedEvent, OrderCreatedEvent)
+        handle() {}
+      }
+    }).toThrow('Duplicate outbox event type "order.created" in @OnOutboxEvent');
+  });
 });

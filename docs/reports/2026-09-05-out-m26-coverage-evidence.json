@@ -1,0 +1,287 @@
+{
+  "scope": "Local OUT-M26 unit coverage runs; dirty working tree, no remote CI run. PostgreSQL evidence is recorded separately in the report.",
+  "runs": [
+    {
+      "startedAt": "2026-09-05T00:14:11.062Z",
+      "completedAt": "2026-09-05T00:14:16.174Z",
+      "commit": "16e9fc2be5e946dfdc7a10ff740f5c0880d37bcd",
+      "tree": "b1f46998e38abdf6d942810daa82222f3765d589",
+      "dirty": true,
+      "inputSha256": "84ec729eebd15924a1db77ec7ab8c91d7ea2d0028512bb16ef020f3a2c5457c8",
+      "runtime": {
+        "node": "v24.11.1",
+        "npm": "11.6.2",
+        "platform": "darwin",
+        "arch": "arm64",
+        "packages": {
+          "@nestjs/common": "11.2.3",
+          "@nestjs/core": "11.2.3",
+          "@nestjs/schedule": "5.0.1",
+          "@nestjs/testing": "11.2.3",
+          "prisma": "7.10.0",
+          "@prisma/client": "7.10.0",
+          "@prisma/adapter-pg": "7.10.0",
+          "pg": "8.20.0",
+          "jest": "29.7.0",
+          "ts-jest": "29.4.9",
+          "typescript": "5.9.3"
+        }
+      },
+      "unitSuites": 10,
+      "unitTests": 212,
+      "reports": {
+        "coverage-final.json": "5aa9c6c6415c7d8f1a3a58b64172b61ce54f32a56e596b3b3aba16e164e09a6d",
+        "coverage-summary.json": "e96a7fbf9a3ad3b596a27f39e722178afac5ed9de7349364711ee4fd28d51dd4",
+        "lcov.info": "74d09d465c6e44f236b2b2d29e0c1f1e5fc66591ff8ab6b6078517fc88c6fe2f",
+        "test-results.json": "24d1ddf3c36cb371cbaae3fff7f7eeb711313808ae3004b91730a25c8c7947d1"
+      },
+      "coverage": {
+        "total": {
+          "branches": {
+            "total": 485,
+            "covered": 427,
+            "skipped": 0,
+            "pct": 88.04
+          },
+          "statements": {
+            "total": 1137,
+            "covered": 1078,
+            "skipped": 0,
+            "pct": 94.81
+          },
+          "lines": {
+            "total": 1060,
+            "covered": 1011,
+            "skipped": 0,
+            "pct": 95.37
+          },
+          "functions": {
+            "total": 179,
+            "covered": 174,
+            "skipped": 0,
+            "pct": 97.2
+          }
+        },
+        "outbox.admin.service.ts": {
+          "branches": {
+            "total": 83,
+            "covered": 81,
+            "skipped": 0,
+            "pct": 97.59
+          },
+          "statements": {
+            "total": 187,
+            "covered": 186,
+            "skipped": 0,
+            "pct": 99.46
+          },
+          "lines": {
+            "total": 175,
+            "covered": 175,
+            "skipped": 0,
+            "pct": 100
+          },
+          "functions": {
+            "total": 26,
+            "covered": 26,
+            "skipped": 0,
+            "pct": 100
+          }
+        },
+        "outbox.listener.ts": {
+          "branches": {
+            "total": 46,
+            "covered": 42,
+            "skipped": 0,
+            "pct": 91.3
+          },
+          "statements": {
+            "total": 164,
+            "covered": 157,
+            "skipped": 0,
+            "pct": 95.73
+          },
+          "lines": {
+            "total": 151,
+            "covered": 146,
+            "skipped": 0,
+            "pct": 96.68
+          },
+          "functions": {
+            "total": 26,
+            "covered": 25,
+            "skipped": 0,
+            "pct": 96.15
+          }
+        },
+        "outbox.poller.ts": {
+          "branches": {
+            "total": 101,
+            "covered": 92,
+            "skipped": 0,
+            "pct": 91.08
+          },
+          "statements": {
+            "total": 254,
+            "covered": 248,
+            "skipped": 0,
+            "pct": 97.63
+          },
+          "lines": {
+            "total": 238,
+            "covered": 233,
+            "skipped": 0,
+            "pct": 97.89
+          },
+          "functions": {
+            "total": 38,
+            "covered": 38,
+            "skipped": 0,
+            "pct": 100
+          }
+        }
+      }
+    },
+    {
+      "startedAt": "2026-09-05T00:12:44.513Z",
+      "completedAt": "2026-09-05T00:12:48.314Z",
+      "commit": "16e9fc2be5e946dfdc7a10ff740f5c0880d37bcd",
+      "tree": "b1f46998e38abdf6d942810daa82222f3765d589",
+      "dirty": true,
+      "inputSha256": "84ec729eebd15924a1db77ec7ab8c91d7ea2d0028512bb16ef020f3a2c5457c8",
+      "runtime": {
+        "node": "v24.11.1",
+        "npm": "11.6.2",
+        "platform": "darwin",
+        "arch": "arm64",
+        "packages": {
+          "@nestjs/common": "12.0.1",
+          "@nestjs/core": "12.0.1",
+          "@nestjs/schedule": "12.0.1",
+          "@nestjs/testing": "12.0.1",
+          "prisma": "7.10.0",
+          "@prisma/client": "7.10.0",
+          "@prisma/adapter-pg": "7.10.0",
+          "pg": "8.20.0",
+          "jest": "29.7.0",
+          "ts-jest": "29.4.12",
+          "typescript": "5.9.3"
+        }
+      },
+      "unitSuites": 10,
+      "unitTests": 212,
+      "reports": {
+        "coverage-final.json": "e89f0a9ea43c8b948c285a5759d40d69ba54ddbebaaca67afc73f47f8f727c88",
+        "coverage-summary.json": "e96a7fbf9a3ad3b596a27f39e722178afac5ed9de7349364711ee4fd28d51dd4",
+        "lcov.info": "89bb929e65d574e348b826f777ac5e52d55a317b908c48b75de0f2e2f2f36de7",
+        "test-results.json": "8d0495060be56d359cff6d6adb9d4cdafd9c8abd9c75429c111359e8e5d0d2dc"
+      },
+      "coverage": {
+        "total": {
+          "branches": {
+            "total": 485,
+            "covered": 427,
+            "skipped": 0,
+            "pct": 88.04
+          },
+          "statements": {
+            "total": 1137,
+            "covered": 1078,
+            "skipped": 0,
+            "pct": 94.81
+          },
+          "lines": {
+            "total": 1060,
+            "covered": 1011,
+            "skipped": 0,
+            "pct": 95.37
+          },
+          "functions": {
+            "total": 179,
+            "covered": 174,
+            "skipped": 0,
+            "pct": 97.2
+          }
+        },
+        "outbox.admin.service.ts": {
+          "branches": {
+            "total": 83,
+            "covered": 81,
+            "skipped": 0,
+            "pct": 97.59
+          },
+          "statements": {
+            "total": 187,
+            "covered": 186,
+            "skipped": 0,
+            "pct": 99.46
+          },
+          "lines": {
+            "total": 175,
+            "covered": 175,
+            "skipped": 0,
+            "pct": 100
+          },
+          "functions": {
+            "total": 26,
+            "covered": 26,
+            "skipped": 0,
+            "pct": 100
+          }
+        },
+        "outbox.listener.ts": {
+          "branches": {
+            "total": 46,
+            "covered": 42,
+            "skipped": 0,
+            "pct": 91.3
+          },
+          "statements": {
+            "total": 164,
+            "covered": 157,
+            "skipped": 0,
+            "pct": 95.73
+          },
+          "lines": {
+            "total": 151,
+            "covered": 146,
+            "skipped": 0,
+            "pct": 96.68
+          },
+          "functions": {
+            "total": 26,
+            "covered": 25,
+            "skipped": 0,
+            "pct": 96.15
+          }
+        },
+        "outbox.poller.ts": {
+          "branches": {
+            "total": 101,
+            "covered": 92,
+            "skipped": 0,
+            "pct": 91.08
+          },
+          "statements": {
+            "total": 254,
+            "covered": 248,
+            "skipped": 0,
+            "pct": 97.63
+          },
+          "lines": {
+            "total": 238,
+            "covered": 233,
+            "skipped": 0,
+            "pct": 97.89
+          },
+          "functions": {
+            "total": 38,
+            "covered": 38,
+            "skipped": 0,
+            "pct": 100
+          }
+        }
+      }
+    }
+  ]
+}

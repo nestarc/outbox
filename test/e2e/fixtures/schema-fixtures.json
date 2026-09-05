@@ -1,0 +1,12 @@
+{
+  "v0.1.0": {
+    "tag": "v0.1.0",
+    "path": "v0.1.0-create-outbox-table.sql",
+    "sha256": "d6b276fce130d9a494390116f296939ef5725ca210c6ebfd2ea6e1b9e86a2634"
+  },
+  "v0.2.1": {
+    "tag": "v0.2.1",
+    "path": "v0.2.1-create-outbox-table.sql",
+    "sha256": "0f17f8a40226f1d6c13172f81f4163cc528d883d13b1381f07db7cec159829cb"
+  }
+}

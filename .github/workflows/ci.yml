@@ -5,7 +5,7 @@ name: CI
 # Three stages:
 #   1. lint  — fast static checks (eslint + type-check). Fails early before
 #              burning matrix CI minutes.
-#   2. test  — legacy and modern runtime tuples run unit + e2e + coverage.
+#   2. test  — Node 22/24 legacy and modern runtime tuples run unit + e2e + coverage.
 #              The primary modern cell also installs the packed tarball into
 #              an isolated strict consumer and exercises it against PostgreSQL.
 #              Gated behind
@@ -47,7 +47,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
 
       - name: Install dependencies
@@ -58,6 +58,15 @@ jobs:
 
       - name: Type check (src)
         run: npx tsc --noEmit -p tsconfig.build.json
+
+      - name: Compatibility policy
+        run: npm run test:compatibility-policy
+
+      - name: Workflow policy
+        run: npm run test:workflow-policy
+
+      - name: Production dependency audit
+        run: npm run audit:production
 
   test:
     name: Test (Node ${{ matrix.node }} x NestJS ${{ matrix.nestjs }} x Prisma ${{ matrix.prisma }})
@@ -83,21 +92,29 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - node: '20'
+          - node: '22'
+            nestjs: '10.4.22'
+            schedule: '4.1.2'
+            prisma: '5.22.0'
+          - node: '22'
             nestjs: '10.4.22'
             schedule: '4.1.2'
             prisma: '6.19.3'
-          - node: '20'
-            nestjs: '11.2.1'
+          - node: '22'
+            nestjs: '11.2.3'
+            schedule: '5.0.1'
+            prisma: '7.10.0'
+          - node: '24'
+            nestjs: '11.2.3'
             schedule: '5.0.1'
             prisma: '7.10.0'
           - node: '22'
-            nestjs: '10.4.22'
-            schedule: '4.1.2'
-            prisma: '6.19.3'
-          - node: '22'
-            nestjs: '11.2.1'
-            schedule: '5.0.1'
+            nestjs: '12.0.1'
+            schedule: '12.0.1'
+            prisma: '7.10.0'
+          - node: '24'
+            nestjs: '12.0.1'
+            schedule: '12.0.1'
             prisma: '7.10.0'
 
     env:
@@ -117,7 +134,15 @@ jobs:
         run: npm ci
 
       - name: Install exact runtime tuple
+        env:
+          OUTBOX_PRISMA_VERSION: ${{ matrix.prisma }}
         run: |
+          # A second --no-save install resets the first tuple to package.json.
+          # Install the optional legacy/modern adapter in the same operation.
+          OUTBOX_ADAPTER_ARGS=()
+          if [ "$OUTBOX_PRISMA_VERSION" != '5.22.0' ]; then
+            OUTBOX_ADAPTER_ARGS+=("@prisma/adapter-pg@$OUTBOX_PRISMA_VERSION")
+          fi
           npm install --no-save --strict-peer-deps --no-audit --no-fund \
             @nestjs/common@${{ matrix.nestjs }} \
             @nestjs/core@${{ matrix.nestjs }} \
@@ -126,7 +151,7 @@ jobs:
             @nestjs/schedule@${{ matrix.schedule }} \
             prisma@${{ matrix.prisma }} \
             @prisma/client@${{ matrix.prisma }} \
-            @prisma/adapter-pg@${{ matrix.prisma }}
+            "${OUTBOX_ADAPTER_ARGS[@]}"
 
       - name: Assert exact runtime tuple
         run: |
@@ -135,8 +160,11 @@ jobs:
             "@nestjs/core@${{ matrix.nestjs }}" \
             "@nestjs/schedule@${{ matrix.schedule }}" \
             "prisma@${{ matrix.prisma }}" \
-            "@prisma/client@${{ matrix.prisma }}" \
-            "@prisma/adapter-pg@${{ matrix.prisma }}"
+            "@prisma/client@${{ matrix.prisma }}"
+
+      - name: Assert exact Prisma driver adapter
+        if: matrix.prisma != '5.22.0'
+        run: node scripts/assert-installed-versions.js "@prisma/adapter-pg@${{ matrix.prisma }}"
 
       - name: Unit tests
         run: npm test
@@ -145,18 +173,38 @@ jobs:
         run: npm run test:e2e
 
       - name: Strict packed modern consumer with PostgreSQL
-        if: matrix.node == '22' && matrix.nestjs == '11.2.1' && matrix.prisma == '7.10.0'
+        if: matrix.node == '22' && matrix.nestjs == '11.2.3' && matrix.prisma == '7.10.0'
         run: npm run test:modern-consumer
 
+      - name: Strict packed package exports consumer without optional pg
+        if: matrix.node == '22' && matrix.nestjs == '11.2.3' && matrix.prisma == '7.10.0'
+        run: npm run test:package-exports
+
+      - name: Strict packed README examples with and without optional pg
+        if: matrix.node == '22' && matrix.nestjs == '11.2.3' && matrix.prisma == '7.10.0'
+        run: npm run test:packed-examples
+
+      - name: Strict packed Prisma 5 consumer with PostgreSQL
+        if: matrix.node == '22' && matrix.nestjs == '10.4.22' && matrix.prisma == '5.22.0'
+        run: npm run test:prisma5-consumer
+
+      - name: Strict packed Prisma 6 consumer with PostgreSQL
+        if: matrix.node == '22' && matrix.nestjs == '10.4.22' && matrix.prisma == '6.19.3'
+        run: npm run test:prisma6-consumer
+
+      - name: Strict packed NestJS 12 consumer with PostgreSQL
+        if: matrix.nestjs == '12.0.1'
+        run: npm run test:nest12-consumer
+
       - name: Coverage (primary cell only)
-        if: matrix.node == '22' && matrix.nestjs == '11.2.1' && matrix.prisma == '7.10.0'
+        if: matrix.node == '24' && matrix.nestjs == '12.0.1' && matrix.prisma == '7.10.0'
         run: npm run test:cov
 
       - name: Upload coverage artifact
-        if: matrix.node == '22' && matrix.nestjs == '11.2.1' && matrix.prisma == '7.10.0'
+        if: matrix.node == '24' && matrix.nestjs == '12.0.1' && matrix.prisma == '7.10.0'
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-report
+          name: coverage-${{ github.sha }}-node${{ matrix.node }}-nest${{ matrix.nestjs }}-prisma${{ matrix.prisma }}-${{ github.run_attempt }}
           path: coverage/
           if-no-files-found: error
           retention-days: 14
@@ -172,7 +220,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           cache: npm
 
       - name: Install dependencies
@@ -191,3 +239,42 @@ jobs:
           path: dist/
           if-no-files-found: error
           retention-days: 7
+
+  node26-canary:
+    name: Node 26 pre-LTS canary (allowed failure)
+    continue-on-error: true
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: outbox_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d outbox_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://test:test@localhost:5433/outbox_test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 26
+        uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Strict packed NestJS 12 consumer with PostgreSQL
+        run: npm run test:nest12-consumer

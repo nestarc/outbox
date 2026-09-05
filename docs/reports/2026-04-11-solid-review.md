@@ -1,5 +1,14 @@
 # SOLID 설계 검증 리포트
 
+> [!IMPORTANT]
+> **HISTORICAL / COMPLETED / SUPERSEDED.** 이 평가는 v0.1 시점의 코드와 수치를 기록한
+> 자료이며 현재 구현·backlog의 판정문이 아니다. 현재 작업의 권위 있는
+> 목록은
+> [`2026-09-02-p0-p4-maintenance-work-plan.md`](../2026-09-02-p0-p4-maintenance-work-plan.md)다.
+> 아직 유효한 poller 책임 분리 관찰은 `OUT-M31`, packed public typing 검증은
+> `OUT-M25`가 소유한다. 이 문서의 과거 line 번호와 개선 절차를 작업 지시로
+> 복사하지 않는다.
+
 작성일: 2026-04-11
 대상 프로젝트: `@nestarc/outbox`
 검토 범위: `src/`, `test/`, `README.md`, 설계 문서
