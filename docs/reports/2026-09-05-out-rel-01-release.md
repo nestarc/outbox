@@ -172,3 +172,19 @@ artifact and must not be published as the final release.
    record the remote artifact digest and close OUT-M21 and OUT-REL-01.
 
 Jobs publishing and TEN-ECO-NEXT remain downstream work, not release blockers.
+
+## GitHub Release follow-up — 2026-09-05
+
+PR #18 is merged into protected main at
+`39e6b4f346d4157143e7ba08f260cea8bb3fe7f5`.
+[Main CI 33935541658](https://github.com/nestarc/outbox/actions/runs/33935541658)
+passed every required job and the Node 26 canary. The user has requested the
+GitHub Release; CHANGELOG now assigns 2026-09-05 to 0.3.0 as the intended
+release date. This date is not evidence of publication.
+
+The follow-up read-only check still found no v0.3.0 tag or GitHub Release, and
+npm latest remains 0.2.1. The npm environment still has no reviewer or ref
+restriction and permits admin bypass. Reviewer selection has been requested;
+publication remains blocked until the required environment controls are ready.
+The protected tag workflow will own actual publication and verified provenance
+before creating the GitHub Release.

@@ -454,12 +454,12 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 
 ### `OUT-M12` — release authorization과 least privilege
 
-- 상태: `P1 / EXTERNAL` — 2026-09-05 관리자 인증과 main/tag ruleset 적용을 확인했다. npm 환경 승인자 지정·Trusted Publisher 설정 확인과 hardened workflow의 protected main merge가 남아 있다. branch remote dry-run은 통과했다. 상세: [OUT-REL-01](reports/2026-09-05-out-rel-01-release.md).
+- 상태: `P1 / EXTERNAL` — 2026-09-05 관리자 인증과 main/tag ruleset 적용을 확인했다. npm 환경 승인자 지정·Trusted Publisher 확인이 남아 있다. hardened workflow는 PR #18로 protected main 39e6b4f에 병합됐고 main CI 33935541658이 통과했다. branch remote dry-run도 통과했다. 상세: [OUT-REL-01](reports/2026-09-05-out-rel-01-release.md).
 - 문제: manual dispatch 기본값이 publish이고 tag/version check는 tag push에만 적용된다. publish와 GitHub Release 권한도 같은 job 경계에 있고 Actions가 mutable major tag다.
 
 완료 조건:
 
-- [ ] 실제 publish는 protected main의 immutable matching `v*` tag만 허용한다. topic workflow의 tag/version/main ancestry 검증과 active main/tag ruleset(22309658/22309659, bypass 없음)은 확인했으나 hardened workflow의 protected main merge와 npm environment 적용이 남아 있다.
+- [ ] 실제 publish는 protected main의 immutable matching `v*` tag만 허용한다. topic workflow의 tag/version/main ancestry 검증과 active main/tag ruleset(22309658/22309659, bypass 없음)은 확인했으나 hardened workflow의 protected main merge 및 main CI는 완료됐고 npm environment 적용이 남아 있다.
 - [x] manual dispatch는 dry-run only 또는 exact protected SHA/tag confirmation을 요구한다.
 - [x] actionlint 또는 repository-local workflow policy fixture로 manual publish 기본값, job-level permission, immutable action ref의 첫 RED를 자동 검증한다.
 - [x] npm publish job은 OIDC만, GitHub Release job은 contents write만 가져 서로의 고권한을 공유하지 않는다.
@@ -660,7 +660,7 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 ### `OUT-REL-01` — next release gate
 
 - 상태: `release / BLOCKED`; 선행 `OUT-M01–03`, `OUT-M04A–B`, `OUT-M05`, `OUT-M09`, `OUT-M12–13`, `OUT-M19`, `OUT-M21`
-- 2026-09-05: next version을 **0.3.0**으로 확정하고 manifest/lock, README upgrade checklist, versioned CHANGELOG 초안을 준비했다. main/tag ruleset을 적용했고 local A/B/C/D/E, 원격 CI 33933558624의 필수 8개 검사와 release dry-run 33933556228을 통과했다. npm 환경 승인자와 Trusted Publisher 확인, protected main merge와 tag publish 증거는 아직 남아 있어 `DONE`이 아니다. [현재 증거와 후속 절차](reports/2026-09-05-out-rel-01-release.md).
+- 2026-09-05: next version을 **0.3.0**으로 확정하고 manifest/lock, README upgrade checklist, versioned CHANGELOG 초안을 준비했다. main/tag ruleset을 적용했고 local A/B/C/D/E, 원격 CI 33933558624의 필수 8개 검사와 release dry-run 33933556228을 통과했다. protected main merge(PR #18, 39e6b4f)와 main CI 33935541658은 완료됐으며, npm 환경 승인자·Trusted Publisher 확인과 tag publish 증거는 아직 남아 있어 `DONE`이 아니다. [현재 증거와 후속 절차](reports/2026-09-05-out-rel-01-release.md).
 - `OUT-M01–03`, `OUT-M04A–B`, `OUT-M05`의 semver 메모를 종합해 schema/public behavior에 맞는 next version을 결정하고 manifest/README/CHANGELOG를 맞춘다.
 - `OUT-M12`의 authorization/least privilege, `OUT-M13`의 선언된 Prisma floor 증거, `OUT-M19`의 migration을 포함한 release commit에서 `OUT-M21`의 pack-once workflow를 실행한다.
 - 모든 선행 작업이 merge된 release commit에서 프로필 A/B/C/D/E와 P0 regression을 검증한 candidate tgz를 한 번만 만들고 그 exact artifact만 publish한다. 이전 task branch에서 만든 tgz를 재사용하지 않는다.
@@ -1314,3 +1314,11 @@ External PR, run, release evidence: GitHub administrator authentication verified
 Remaining risk: no 0.3.0 version is published; OUT-M12/OUT-M21/OUT-REL-01 cannot be marked DONE until external gates succeed. Existing OUT-M22B expiry 2026-10-04 is unchanged.
 Next exact action: designate the npm environment reviewer and confirm Trusted Publisher after npm sign-in; finish environment protection, review/merge draft PR #18 through protected main, finalize the CHANGELOG date, then create v0.3.0 on the protected release commit and verify exact registry integrity/provenance and identical-byte rerun. Do not publish the branch preflight artifact.
 ```
+
+
+### `OUT-REL-01` GitHub Release 후속 준비 — 2026-09-05
+
+- 사용자가 GitHub Release 진행을 요청했다. PR #18은 protected main `39e6b4f346d4157143e7ba08f260cea8bb3fe7f5`에 병합됐으며 [main CI 33935541658](https://github.com/nestarc/outbox/actions/runs/33935541658)의 필수 8개 검사와 Node 26 canary가 모두 통과했다.
+- `CHANGELOG.md`의 0.3.0 날짜를 2026-09-05로 확정한다. 이는 릴리스 준비 날짜이며 태그·npm·GitHub Release 게시 완료 증거를 대신하지 않는다.
+- read-only 재확인에서 `v0.3.0` tag/release는 없고 npm latest는 0.2.1이었다. main/tag ruleset은 active지만 npm environment는 reviewer 없음, admin bypass true, deployment ref policy null로 남아 있다.
+- 승인자 지정 답변 및 환경 보호 설정을 완료한 뒤 protected main의 최종 release commit에 `v0.3.0`을 생성한다. release workflow가 동일 artifact를 검증·게시하고 provenance를 확인한 후 GitHub Release를 생성해야 한다. 선행 확인 전에는 OUT-M12/OUT-M21/OUT-REL-01을 DONE으로 바꾸지 않는다.
