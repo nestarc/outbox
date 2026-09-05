@@ -6,3 +6,11 @@ datasource db {
 generator client {
   provider = "prisma-client-js"
 }
+
+// Prisma 5 requires a model to generate a client. E2E only uses raw SQL;
+// this generation-only probe is never migrated or queried.
+model GenerationProbe {
+  id String @id @default(uuid()) @db.Uuid
+
+  @@map("generation_probe")
+}

@@ -459,7 +459,7 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 
 완료 조건:
 
-- [x] 실제 publish는 protected main의 immutable matching `v*` tag만 허용한다. workflow의 tag/version/main ancestry 검증과 active main/tag ruleset(22309658/22309659, bypass 없음)을 확인했다.
+- [ ] 실제 publish는 protected main의 immutable matching `v*` tag만 허용한다. topic workflow의 tag/version/main ancestry 검증과 active main/tag ruleset(22309658/22309659, bypass 없음)은 확인했으나 hardened workflow의 protected main merge와 npm environment 적용이 남아 있다.
 - [x] manual dispatch는 dry-run only 또는 exact protected SHA/tag confirmation을 요구한다.
 - [x] actionlint 또는 repository-local workflow policy fixture로 manual publish 기본값, job-level permission, immutable action ref의 첫 RED를 자동 검증한다.
 - [x] npm publish job은 OIDC만, GitHub Release job은 contents write만 가져 서로의 고권한을 공유하지 않는다.
@@ -1306,11 +1306,11 @@ Next exact action: review the OUT-M26 diff and run remote Node 22/24 CI/release 
 Task: OUT-REL-01
 State: BLOCKED (local release preparation complete; external release gates pending)
 Start ref / end ref: local main@c14e71ecbfec90601c9e6ad96f8c656ae59c1942 / codex/out-rel-01-release-0-3-0
-Changed files: package manifest/lock, README upgrade checklist, versioned CHANGELOG, maintenance plan, OUT-REL-01 report and audit/ruleset/artifact evidence
+Changed files: package manifest/lock, README upgrade checklist, versioned CHANGELOG, CI atomic tuple install, generation-only legacy Prisma E2E probe, maintenance plan, OUT-REL-01 report and audit/ruleset/artifact evidence
 Contract / semver decision: 0.3.0 pre-1.0 minor; required unified SQL migration after draining old workers, readonly callbacks, structured admin mutation results, async registrations, tenant null rejection, Node 22 floor and explicit exports. CHANGELOG remains Unreleased until actual publication.
 Commands and exact results: strict npm ci 645 packages; clean/lint/typecheck/build/compatibility/workflow policy PASS (20 pinned refs); unit/coverage 10 suites/212 tests and PostgreSQL 16 E2E 1 suite/38 tests PASS; same 134-file/71,705-byte candidate SHA-256 56856c21d48199ced25ac7e79899294a0e9ba32fdd75a36bcdb889c33a6dc30c passed all Nest 10/11/12, Prisma 5/6/7, README optional pg and no-pg exports consumers, artifact verification, registry absent check and npm publish dry-run. Production audit 0; full audit 4 high dev-only Prisma nodes.
 Unverified paths and reason: npm environment reviewer selection and Trusted Publisher authenticated inspection are pending. Final protected-main release artifact, npm publish/attestation, GitHub Release and immutable tag rerun remain unverified. Local candidate metadata identifies the starting HEAD and is explicitly dirty-tree validation evidence, never the protected release artifact.
-External PR, run, release evidence: GitHub administrator authentication verified; main ruleset 22309658 and immutable tag ruleset 22309659 active with no bypass actors. Before/after JSON retained. Remote PR/CI evidence will be appended after execution.
+External PR, run, release evidence: GitHub administrator authentication verified; main ruleset 22309658 and immutable tag ruleset 22309659 active with no bypass actors. Before/after JSON retained. Draft PR #18; first CI 33933027009 exposed adapter reinstall tuple drift and Prisma 5 empty-schema generation, both corrected before rerun. Manual dry-run 33933035863 dispatched without publish authority.
 Remaining risk: no 0.3.0 version is published; OUT-M12/OUT-M21/OUT-REL-01 cannot be marked DONE until external gates succeed. Existing OUT-M22B expiry 2026-10-04 is unchanged.
 Next exact action: review/merge the full accumulated candidate via protected main after mandatory CI and manual dry-run; complete npm reviewer/environment/Trusted Publisher settings; then create v0.3.0 on the protected release commit and verify exact registry integrity/provenance and identical-byte rerun.
 ```

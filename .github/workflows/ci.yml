@@ -134,7 +134,15 @@ jobs:
         run: npm ci
 
       - name: Install exact runtime tuple
+        env:
+          OUTBOX_PRISMA_VERSION: ${{ matrix.prisma }}
         run: |
+          # A second --no-save install resets the first tuple to package.json.
+          # Install the optional legacy/modern adapter in the same operation.
+          OUTBOX_ADAPTER_ARGS=()
+          if [ "$OUTBOX_PRISMA_VERSION" != '5.22.0' ]; then
+            OUTBOX_ADAPTER_ARGS+=("@prisma/adapter-pg@$OUTBOX_PRISMA_VERSION")
+          fi
           npm install --no-save --strict-peer-deps --no-audit --no-fund \
             @nestjs/common@${{ matrix.nestjs }} \
             @nestjs/core@${{ matrix.nestjs }} \
@@ -142,11 +150,8 @@ jobs:
             @nestjs/testing@${{ matrix.nestjs }} \
             @nestjs/schedule@${{ matrix.schedule }} \
             prisma@${{ matrix.prisma }} \
-            @prisma/client@${{ matrix.prisma }}
-
-      - name: Install exact Prisma driver adapter
-        if: matrix.prisma != '5.22.0'
-        run: npm install --no-save --strict-peer-deps --no-audit --no-fund @prisma/adapter-pg@${{ matrix.prisma }}
+            @prisma/client@${{ matrix.prisma }} \
+            "${OUTBOX_ADAPTER_ARGS[@]}"
 
       - name: Assert exact runtime tuple
         run: |

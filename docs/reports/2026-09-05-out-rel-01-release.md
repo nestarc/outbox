@@ -96,6 +96,28 @@ not the uncommitted version/README edits. A final release workflow must pack
 again exactly once from the committed, reviewed release ref and use its own
 digest throughout verification, publication and attestation.
 
+## Remote preflight and corrected CI defects
+
+[Draft PR #18](https://github.com/nestarc/outbox/pull/18) contains the full
+maintenance candidate. The initial
+[CI run](https://github.com/nestarc/outbox/actions/runs/33933027009) caught two
+previously unexecuted matrix defects:
+
+- Nest 12 and Prisma 6 lanes failed the existing exact-version assertion:
+  a second `npm install --no-save` for the adapter reset the first installed
+  tuple to manifest defaults (`@nestjs/common@11.2.3`). CI now includes the
+  adapter argument in the same install as the complete Nest/Prisma tuple.
+- The Prisma 5 lane passed its 212 unit tests but could not generate the E2E
+  client because the legacy schema contained no models. It now includes an
+  unused generation-only probe model, as the packed Prisma 5 fixture already
+  does. No production table or package runtime code changes.
+
+These are release-gate fixes, not waived CI failures. The existing tuple
+assertions and real PostgreSQL E2E remain mandatory. The initial manual
+[release dry-run](https://github.com/nestarc/outbox/actions/runs/33933035863)
+uses only contents-read jobs; real publish jobs cannot execute on dispatch.
+Updated remote results will be recorded after the corrected candidate runs.
+
 ## Remaining release sequence
 
 1. Complete remote CI/manual dry-run against the committed candidate.
