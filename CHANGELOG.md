@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] — Unreleased
+
+### Migration
+
+This pre-1.0 minor requires a database upgrade and caller changes. Follow the
+[0.3.0 upgrade steps](README.md#upgrading-to-030): drain old pollers, apply the
+unified SQL migration, move to Node 22/24, update async provider registrations,
+replace nullable tenant overrides, handle structured admin mutation results,
+and remove unsupported deep imports. Delivery remains at-least-once.
+
 ### Added
 
 - Critical per-file coverage gates for poller transitions, admin CAS, and
@@ -83,8 +93,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the Prisma 7 CLI exception awaits an upstream supported fix (OUT-M22B).
 - The package now declares an explicit export map for the CommonJS/type root
   and the documented fresh/current SQL migration paths. Accidental `dist/**`
-  and component-migration deep imports are intentionally blocked in the next
-  pre-1.0 minor; consumers must import runtime/types from the root and resolve
+  and component-migration deep imports are intentionally blocked in 0.3.0;
+  consumers must import runtime/types from the root and resolve
   only `create-outbox-table.sql` or `upgrade-to-current.sql`.
 - The development lint toolchain now uses the supported ESLint 10 flat-config
   line, TypeScript ESLint 8, and current Prettier compatibility rules. This
@@ -92,9 +102,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dependencies or the production audit-zero gate.
 
 - The minimum Node.js engine is now 22. Node 20 reached upstream EOL on
-  2026-03-24 and is removed in the next pre-1.0 minor rather than carried as a
-  legacy lane. Node 22 and 24 are required runtime controls; Node 26 remains an
-  allowed-failure pre-LTS canary.
+  2026-03-24 and is removed in 0.3.0. Node 22 and 24 are required runtime
+  controls; Node 26 remains an allowed-failure pre-LTS canary.
 - NestJS 12 is now included in the `@nestjs/common` and `@nestjs/core` peer
   ranges, paired with `@nestjs/schedule` 12. The exact NestJS 12.0.1 + Schedule
   12.0.1 + Prisma 7.10.0 candidate passed strict packed type/module and
@@ -104,7 +113,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are constructed by Nest with dependencies from `imports`; factory-returned
   `transport`, `tenancy.provider`, or `isGlobal` values are rejected instead
   of being ignored or instantiated with a bare constructor. The public async
-  factory type is tightened for the next pre-1.0 minor release.
+  factory type is tightened in 0.3.0.
 - Global admin access is now named `OutboxOperatorService` and documented as a
   privileged control-plane API; `OutboxAdminService` remains a deprecated
   compatibility alias. `OutboxTenantAdminService.forTenant()` creates a fixed

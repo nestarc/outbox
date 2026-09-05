@@ -1,6 +1,6 @@
 {
   "name": "@nestarc/outbox",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Prisma-native transactional outbox for NestJS — atomic event emission, polling with SKIP LOCKED, retry with backoff, @OnOutboxEvent() decorator.",
   "license": "MIT",
   "author": "nestarc",

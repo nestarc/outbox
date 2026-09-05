@@ -1,0 +1,75 @@
+{
+  "id": 22309658,
+  "name": "OUT-M12 protected main",
+  "target": "branch",
+  "source_type": "Repository",
+  "source": "nestarc/outbox",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": { "exclude": [], "include": ["refs/heads/main"] }
+  },
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" },
+    {
+      "type": "pull_request",
+      "parameters": {
+        "required_approving_review_count": 0,
+        "dismiss_stale_reviews_on_push": true,
+        "required_reviewers": [],
+        "require_code_owner_review": false,
+        "dismissal_restriction": { "enabled": false, "allowed_actors": [] },
+        "require_last_push_approval": false,
+        "required_review_thread_resolution": true,
+        "require_extra_approval_for_unattributed_changes": true,
+        "allowed_merge_methods": ["merge", "squash", "rebase"]
+      }
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": true,
+        "do_not_enforce_on_create": false,
+        "required_status_checks": [
+          { "context": "Lint & type-check", "integration_id": 15368 },
+          {
+            "context": "Test (Node 22 x NestJS 10.4.22 x Prisma 5.22.0)",
+            "integration_id": 15368
+          },
+          {
+            "context": "Test (Node 22 x NestJS 10.4.22 x Prisma 6.19.3)",
+            "integration_id": 15368
+          },
+          {
+            "context": "Test (Node 22 x NestJS 11.2.3 x Prisma 7.10.0)",
+            "integration_id": 15368
+          },
+          {
+            "context": "Test (Node 24 x NestJS 11.2.3 x Prisma 7.10.0)",
+            "integration_id": 15368
+          },
+          {
+            "context": "Test (Node 22 x NestJS 12.0.1 x Prisma 7.10.0)",
+            "integration_id": 15368
+          },
+          {
+            "context": "Test (Node 24 x NestJS 12.0.1 x Prisma 7.10.0)",
+            "integration_id": 15368
+          },
+          { "context": "Pack (publish dry-run)", "integration_id": 15368 }
+        ]
+      }
+    }
+  ],
+  "node_id": "RRS_lACqUmVwb3NpdG9yec5H8ZxkzgFUaxo",
+  "created_at": "2026-09-05T09:23:20.464+09:00",
+  "updated_at": "2026-09-05T09:23:20.521+09:00",
+  "bypass_actors": [],
+  "current_user_can_bypass": "never",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/nestarc/outbox/rulesets/22309658"
+    },
+    "html": { "href": "https://github.com/nestarc/outbox/rules/22309658" }
+  }
+}

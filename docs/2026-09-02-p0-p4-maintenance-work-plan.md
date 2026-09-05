@@ -454,12 +454,12 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 
 ### `OUT-M12` — release authorization과 least privilege
 
-- 상태: `P1 / EXTERNAL` — repository workflow 변경은 완료됐으나 GitHub ruleset/npm environment 변경에 필요한 관리자 인증이 없다.
+- 상태: `P1 / EXTERNAL` — 2026-09-05 관리자 인증과 main/tag ruleset 적용을 확인했다. npm 환경 승인자 지정·Trusted Publisher 설정 확인 및 remote dry-run 증거가 남아 있다. 상세: [OUT-REL-01](reports/2026-09-05-out-rel-01-release.md).
 - 문제: manual dispatch 기본값이 publish이고 tag/version check는 tag push에만 적용된다. publish와 GitHub Release 권한도 같은 job 경계에 있고 Actions가 mutable major tag다.
 
 완료 조건:
 
-- [ ] 실제 publish는 protected main의 immutable matching `v*` tag만 허용한다. (workflow의 tag/version/main ancestry 검증은 완료; main/tag immutability ruleset은 외부 관리자 작업)
+- [x] 실제 publish는 protected main의 immutable matching `v*` tag만 허용한다. workflow의 tag/version/main ancestry 검증과 active main/tag ruleset(22309658/22309659, bypass 없음)을 확인했다.
 - [x] manual dispatch는 dry-run only 또는 exact protected SHA/tag confirmation을 요구한다.
 - [x] actionlint 또는 repository-local workflow policy fixture로 manual publish 기본값, job-level permission, immutable action ref의 첫 RED를 자동 검증한다.
 - [x] npm publish job은 OIDC만, GitHub Release job은 contents write만 가져 서로의 고권한을 공유하지 않는다.
@@ -660,6 +660,7 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 ### `OUT-REL-01` — next release gate
 
 - 상태: `release / BLOCKED`; 선행 `OUT-M01–03`, `OUT-M04A–B`, `OUT-M05`, `OUT-M09`, `OUT-M12–13`, `OUT-M19`, `OUT-M21`
+- 2026-09-05: next version을 **0.3.0**으로 확정하고 manifest/lock, README upgrade checklist, versioned CHANGELOG 초안을 준비했다. main/tag ruleset을 적용했고 local A/B/C/E를 통과했다. npm 환경 승인자와 Trusted Publisher 확인, protected main merge와 tag publish 증거는 아직 남아 있어 `DONE`이 아니다. [현재 증거와 후속 절차](reports/2026-09-05-out-rel-01-release.md).
 - `OUT-M01–03`, `OUT-M04A–B`, `OUT-M05`의 semver 메모를 종합해 schema/public behavior에 맞는 next version을 결정하고 manifest/README/CHANGELOG를 맞춘다.
 - `OUT-M12`의 authorization/least privilege, `OUT-M13`의 선언된 Prisma floor 증거, `OUT-M19`의 migration을 포함한 release commit에서 `OUT-M21`의 pack-once workflow를 실행한다.
 - 모든 선행 작업이 merge된 release commit에서 프로필 A/B/C/D/E와 P0 regression을 검증한 candidate tgz를 한 번만 만들고 그 exact artifact만 publish한다. 이전 task branch에서 만든 tgz를 재사용하지 않는다.
@@ -828,6 +829,8 @@ Outbox ── durable record / publisher callback ──> Jobs adapter ──> J
 | 2026-09-05 | `OUT-M22B` | `BLOCKED` | local `5319d79` → `codex/out-m22bc-dev-audit` working tree | online audit/registry metadata: Prisma 7.10.0 exact pins remain; production 0 | supported Prisma 7 fix 게시 시 재검증; 기존 2026-10-04 예외 만료 유지 |
 | 2026-09-05 | `OUT-M22C` | `DONE` | local `5319d79` → `codex/out-m22bc-dev-audit` working tree | Nest 11.2.3 + compatible Babel/YAML/Express refresh; audit 9 → 4, unit 194/E2E 38 PASS | local 변경 review 및 원격 CI; 남은 advisory는 OUT-M22B |
 | 2026-09-05 | `OUT-M26` | `DONE` | local `16e9fc2` → `codex/out-m26-critical-coverage` working tree | per-file gate, 212 unit/38 E2E on Nest 11/12, metadata tuple/hash and negative controls PASS | 변경 review 후 원격 CI artifact 확인; 다음 READY는 OUT-M27 |
+
+| 2026-09-05 | `OUT-REL-01` | `BLOCKED` | local `c14e71e` → `codex/out-rel-01-release-0-3-0` | 0.3.0 manifest/migration/CHANGELOG; 212 unit/38 E2E, all exact consumers/dry-run PASS; main/tag rulesets active | npm 환경 승인자·Trusted Publisher 확인, remote CI/dry-run와 protected tag publish 필요 |
 
 ### `OUT-M01` 종료 인계
 
@@ -1294,4 +1297,20 @@ Unverified paths and reason: remote Node 22/24 Actions and actual artifact uploa
 External PR, run, release evidence: fetch confirmed origin/main/v0.2.1 at 873f95b, npm latest 0.2.1. The 31 local-only prerequisite commits were preserved. No shared issue claim, commit/push/PR/release was performed. Dedicated compose project outbox-out-m26-20260905 was used; local coverage metadata distinguishes dirty input from committed SHA and reports actual installed versions rather than matrix labels.
 Remaining risk: coverage floors detect aggregate file regressions but do not prove every branch contract or database race. Critical behavior inventory and mandatory PostgreSQL gates must be reviewed together. Existing OUT-M22B Prisma dev-only exception remains unchanged.
 Next exact action: review the OUT-M26 diff and run remote Node 22/24 CI/release verification after push; inspect coverage metadata against its checkout and installed tuple. Next READY implementation task is OUT-M27.
+```
+
+
+### `OUT-REL-01` 종료 인계
+
+```text
+Task: OUT-REL-01
+State: BLOCKED (local release preparation complete; external release gates pending)
+Start ref / end ref: local main@c14e71ecbfec90601c9e6ad96f8c656ae59c1942 / codex/out-rel-01-release-0-3-0
+Changed files: package manifest/lock, README upgrade checklist, versioned CHANGELOG, maintenance plan, OUT-REL-01 report and audit/ruleset/artifact evidence
+Contract / semver decision: 0.3.0 pre-1.0 minor; required unified SQL migration after draining old workers, readonly callbacks, structured admin mutation results, async registrations, tenant null rejection, Node 22 floor and explicit exports. CHANGELOG remains Unreleased until actual publication.
+Commands and exact results: strict npm ci 645 packages; clean/lint/typecheck/build/compatibility/workflow policy PASS (20 pinned refs); unit/coverage 10 suites/212 tests and PostgreSQL 16 E2E 1 suite/38 tests PASS; same 134-file/71,705-byte candidate SHA-256 56856c21d48199ced25ac7e79899294a0e9ba32fdd75a36bcdb889c33a6dc30c passed all Nest 10/11/12, Prisma 5/6/7, README optional pg and no-pg exports consumers, artifact verification, registry absent check and npm publish dry-run. Production audit 0; full audit 4 high dev-only Prisma nodes.
+Unverified paths and reason: npm environment reviewer selection and Trusted Publisher authenticated inspection are pending. Final protected-main release artifact, npm publish/attestation, GitHub Release and immutable tag rerun remain unverified. Local candidate metadata identifies the starting HEAD and is explicitly dirty-tree validation evidence, never the protected release artifact.
+External PR, run, release evidence: GitHub administrator authentication verified; main ruleset 22309658 and immutable tag ruleset 22309659 active with no bypass actors. Before/after JSON retained. Remote PR/CI evidence will be appended after execution.
+Remaining risk: no 0.3.0 version is published; OUT-M12/OUT-M21/OUT-REL-01 cannot be marked DONE until external gates succeed. Existing OUT-M22B expiry 2026-10-04 is unchanged.
+Next exact action: review/merge the full accumulated candidate via protected main after mandatory CI and manual dry-run; complete npm reviewer/environment/Trusted Publisher settings; then create v0.3.0 on the protected release commit and verify exact registry integrity/provenance and identical-byte rerun.
 ```

@@ -1,0 +1,23 @@
+{
+  "id": 22309659,
+  "name": "OUT-M12 immutable release tags",
+  "target": "tag",
+  "source_type": "Repository",
+  "source": "nestarc/outbox",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": { "exclude": [], "include": ["refs/tags/v*.*.*"] }
+  },
+  "rules": [{ "type": "update" }, { "type": "deletion" }],
+  "node_id": "RRS_lACqUmVwb3NpdG9yec5H8ZxkzgFUaxs",
+  "created_at": "2026-09-05T09:23:21.052+09:00",
+  "updated_at": "2026-09-05T09:23:21.065+09:00",
+  "bypass_actors": [],
+  "current_user_can_bypass": "never",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/nestarc/outbox/rulesets/22309659"
+    },
+    "html": { "href": "https://github.com/nestarc/outbox/rules/22309659" }
+  }
+}

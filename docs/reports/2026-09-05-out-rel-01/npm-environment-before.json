@@ -1,0 +1,12 @@
+{
+  "id": 16835770555,
+  "node_id": "EN_kwDOR_GcZM8AAAAD6314uw",
+  "name": "npm",
+  "url": "https://api.github.com/repos/nestarc/outbox/environments/npm",
+  "html_url": "https://github.com/nestarc/outbox/deployments/activity_log?environments_filter=npm",
+  "created_at": "2026-06-17T13:06:54Z",
+  "updated_at": "2026-06-17T13:06:54Z",
+  "can_admins_bypass": true,
+  "protection_rules": [],
+  "deployment_branch_policy": null
+}

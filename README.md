@@ -7,6 +7,9 @@ Prisma-native transactional outbox for NestJS — atomic event emission, polling
 
 ## Installation
 
+This checkout targets **0.3.0**. Existing 0.1.x/0.2.x applications must complete
+the [0.3.0 upgrade steps](#upgrading-to-030) before starting the new runtime.
+
 ```bash
 npm install @nestarc/outbox @nestjs/schedule @prisma/client
 ```
@@ -37,7 +40,7 @@ Pass that configured client (or your Nest `PrismaService` wrapper) to `OutboxMod
 ### Compatibility evidence
 
 Node 22 is the minimum supported runtime. Node 22 and 24 are required controls;
-Node 20 reached upstream EOL and is not supported by the next pre-1.0 minor.
+Node 20 reached upstream EOL and is not supported by 0.3.0.
 The declared framework and Prisma ranges are exercised as packed packages, not
 only against the repository's development dependencies:
 
@@ -176,6 +179,46 @@ The fixture supplies application-owned Prisma models, imports, configuration,
 and email/broker doubles; register your own services in those places.
 
 See [the fixture and run instructions](test/packed-examples/README.md).
+
+## Upgrading to 0.3.0
+
+0.3.0 is a pre-1.0 minor release with required schema and public API changes.
+Before deployment:
+
+1. Move to Node 22 or 24 and a supported NestJS/Schedule/Prisma tuple from the
+   compatibility table above.
+2. Stop and drain every old poller, then apply the bundled
+   [unified SQL upgrade](#sql-migration) using the 0.3.0 package. Schedule a
+   maintenance window for index and constraint changes; repair any invalid
+   existing rows reported by the migration before starting new pollers.
+   Do not run 0.2.x pollers alongside 0.3.0: old workers do not honor claim
+   tokens, leases, or persisted retry due times.
+3. Import runtime values and types from `@nestarc/outbox`. Replace deep imports
+   into `dist/**` or individual migration files with the root or the two
+   [supported SQL paths](#supported-package-paths).
+4. For `forRootAsync()`, move factory-returned `transport`, `tenancy.provider`,
+   and `isGlobal` registrations to top-level `transport`, `tenantProvider`,
+   and `isGlobal`. Import the modules that export their injected dependencies;
+   keep runtime settings such as `tenancy.policy` inside the factory result.
+5. Replace `tenantId: null` with `tenantScope: 'global'` for intentional global
+   events. An undefined tenant now falls back to the provider. Choose
+   `tenancy.policy` explicitly when tenant attribution is required.
+6. Update `retry()` and `markFailed()` callers to inspect the returned
+   `OutboxAdminMutationResult.outcome` instead of treating the result as a
+   boolean. Handle `applied`, `not_found`, `conflict`, and `lost_claim`;
+   `markFailed()` now accepts only `PENDING` and cannot cancel active delivery.
+   Use `OutboxOperatorService` only in privileged code, or a fixed tenant scope
+   from `OutboxTenantAdminService` for tenant-facing operations.
+7. Treat records and callback/hook contexts as readonly detached snapshots.
+   Review producer JSON/envelope and runtime option validation: invalid input
+   now fails before SQL or startup instead of reaching delivery callbacks.
+
+Retry eligibility is persisted in `next_attempt_at`; different worker backoff
+settings no longer reschedule already-failed rows. `stuckThreshold` remains a
+deprecated alias for `lease.duration`. Delivery remains **at-least-once**:
+consumers must be idempotent, and neither FIFO nor downstream completion is
+implied by `SENT`. Hooks remain best-effort observations, including `onEmit`
+before the caller's transaction commits.
 
 ## SQL Migration
 
