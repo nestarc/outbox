@@ -1,0 +1,20 @@
+{
+  "bypass_actors": [],
+  "conditions": {
+    "ref_name": {
+      "exclude": [],
+      "include": ["refs/tags/v*.*.*"]
+    }
+  },
+  "enforcement": "active",
+  "id": 22309659,
+  "name": "OUT-M12 immutable release tags",
+  "rules": [
+    {
+      "type": "update"
+    },
+    {
+      "type": "deletion"
+    }
+  ]
+}

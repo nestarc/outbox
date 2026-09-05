@@ -2,17 +2,18 @@
 
 - 상태: `ACTIVE`
 - 작성일: 2026-09-02 (Asia/Seoul)
-- 공개 기준: `origin/main@873f95bd86682d4b9515d743efbcfc093a88f450`, `v0.2.1`
+- 최신 release 기준: `v0.3.0^{}` = `0e94c8df97bebb5cd85ee119a7608209a0c9e61b`; 현재 main은 fetch로 재확인한다.
+- 최초 공개 조사 기준: `origin/main@873f95bd86682d4b9515d743efbcfc093a88f450`, `v0.2.1`
 - 조사 checkout: `codex/ten-m21-outbox-modern@a735029431af823976f8653c9ab36cfa3d29e5ea`
-- tree hash: 공개 기준과 조사 checkout 모두 `4345b7d8dc8a9a4985a10fd4e036afebbd0c5152`
-- 패키지: `@nestarc/outbox@0.2.1`
+- 최초 조사 tree hash: 당시 공개 기준과 조사 checkout 모두 `4345b7d8dc8a9a4985a10fd4e036afebbd0c5152`
+- 패키지: `@nestarc/outbox@0.3.0`
 - 목적: 조사에서 확인한 P0–P4 작업을 **한 세션에 한 작업, 한 PR** 단위로 나누고, 새 세션이 기준선·완료 작업·선행 결정을 다시 조사하지 않도록 한다.
 
 > [!IMPORTANT]
 > 새 작업은 현재 topic branch가 아니라 fetch한 `origin/main`에서 시작한다. 조사 checkout은 공개 기준과 tree가 같지만 commit lineage가 다르다. `TEN-M21`은 완료됐으며 재개하거나 ID를 재사용하지 않는다.
 
 > [!IMPORTANT]
-> 이 파일은 작성 직후 `untracked` 상태다. 구현 작업보다 먼저 `OUT-PLAN-01`로 이 문서만 review/merge해야 clean checkout과 여러 세션이 같은 상태를 공유할 수 있다. 문서가 `origin/main`에 들어가기 전에는 다른 task를 `IN_PROGRESS`로 바꾸지 않는다.
+> 이 계획과 누적 유지보수 변경은 PR #18로 protected main에 통합됐다. 별도 plan-only bootstrap은 실행되지 않아 `OUT-PLAN-01`은 `SUPERSEDED`로 기록한다. 새 세션은 main의 이 문서와 최신 종료 인계를 읽고 완료된 작업을 다시 시작하지 않는다.
 
 > [!CAUTION]
 > 현재 구현은 end-to-end exactly-once와 global/aggregate FIFO를 보장하지 않는다. Outbox 전달은 at-least-once이고 소비자는 멱등해야 한다. 이 문서의 P0는 거짓 보장을 제거하고 claim 안전성을 높이는 작업이지 exactly-once를 약속하는 작업이 아니다.
@@ -47,7 +48,7 @@
 1. 이 문서와 현재 `git status --short --branch`를 먼저 읽는다.
 2. 기존 수정·미추적 파일의 소유권을 보존한다. 임의로 reset, restore, delete, stage하지 않는다.
 3. `git fetch --tags origin main:refs/remotes/origin/main` 후 `origin/main`, release tag, npm `latest`를 다시 확인한다. 기준이 달라졌다면 코드보다 이 문서의 기준선과 task 상태부터 갱신한다.
-4. `OUT-PLAN-01` merge를 확인한 뒤 공개 기준에서 `codex/out-mxx-<slug>` branch 또는 별도 worktree를 만든다. 조사 topic branch에서 이어서 구현하지 않는다.
+4. fetched main에 이 문서가 포함됐음을 확인한 뒤 `codex/out-mxx-<slug>` branch 또는 별도 worktree를 만든다. 조사 topic branch에서 이어서 구현하지 않는다.
 5. 한 세션은 현재 최저 미완료 priority의 가장 낮은 번호 `READY` 또는 `DECISION` 하나만 선택한다. shared issue/PR에 task ID, owner, start ref, 시작 시각을 먼저 기록하고 나서 `IN_PROGRESS`로 바꾼다. branch-local plan 변경만으로 task를 claim하지 않는다. stale claim은 owner/PR/session이 실제로 종료됐음을 확인한 뒤에만 회수한다. P0 merge 뒤 `OUT-REL-01`의 직접 선행 `OUT-M09`, `OUT-M12`, `OUT-M13`, `OUT-M19`, `OUT-M21`은 unrelated 작업보다 먼저 당길 수 있고, 선행이 모두 끝나면 `OUT-REL-01`을 실행한다.
 6. 각 작업의 “첫 RED”를 먼저 재현한다. 재현되지 않으면 원인을 기록하고 작업 범위를 조용히 바꾸지 않는다.
 7. 작업별 검증 프로필과 `git diff --check`를 실행한 뒤 인계 기록을 남긴다.
@@ -58,9 +59,9 @@
 git status --short --branch
 git fetch --tags origin main:refs/remotes/origin/main
 git rev-parse origin/main
-git rev-parse v0.2.1^{}
+git rev-parse v0.3.0^{}
 git log -1 --oneline origin/main
-gh release view v0.2.1 --json tagName,targetCommitish,publishedAt
+gh release view v0.3.0 --json tagName,targetCommitish,publishedAt
 npm view @nestarc/outbox version gitHead dist.integrity time --json
 node -p "require('./package.json').version"
 ```
@@ -164,11 +165,19 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 | `OUT-M13`    | declared Prisma majors vs 6/7 matrix: `package.json:48-54`, `.github/workflows/ci.yml:82-101`                                                     |
 | `OUT-M04A`   | false absolute guarantee: `README.md:391-398`; actual at-least-once spec: `docs/superpowers/specs/2026-06-17-outbox-0.2.0-spec.md:715-739`        |
 
+### 1.7 2026-09-05 공개 release 갱신
+
+- PR #18/#19가 누적 유지보수와 0.3.0 release 날짜를 protected main에 반영했다.
+- `v0.3.0^{}` = `0e94c8df97bebb5cd85ee119a7608209a0c9e61b`; 해당 main CI 33936492784의 필수 8개 검사와 Node 26 canary PASS.
+- npm `latest` 0.3.0과 [GitHub Release](https://github.com/nestarc/outbox/releases/tag/v0.3.0) 게시 완료. [최종 증거](reports/2026-09-05-out-rel-01-published.md)에 태그·artifact·서명 검증·수동 복구를 기록했다.
+- 원격 tag run 33936720398의 두 attempt는 최종 verification 단계에서 실패했다. attempt 2는 identical-byte publish skip과 npm signature 검사에 성공했고, npm 12 배열 응답 parser 수정 후 동일 Node/npm의 별도 검증으로 모든 provenance 조건을 통과한 다음 GitHub Release를 생성했다. 원격 tag workflow 전체 PASS로 해석하지 않는다.
+- §1.1–1.6과 과거 종료 인계의 0.2.1 기준/미실행 항목은 당시의 역사 기록이다. 현재 상태는 실행 큐와 마지막 종료 인계가 우선한다.
+
 ## 2. 실행 큐
 
 | 순서 | ID             | 우선순위 | 상태       | 크기 | 선행                                                                                 | 작업                                                                |
 | ---: | -------------- | -------- | ---------- | ---- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------- |
-|    0 | `OUT-PLAN-01`  | 문서     | `READY`    | S    | 없음                                                                                 | 이 계획만 별도 PR로 review/merge                                    |
+|    0 | `OUT-PLAN-01`  | 문서     | `SUPERSEDED`    | S    | 없음                                                                                 | PR #18에 계획·누적 구현 통합; plan-only 경로 대체                                    |
 |    1 | `OUT-M04A`     | P0       | `DONE`     | S    | 없음                                                                                 | at-least-once 전달 계약 긴급 정정                                   |
 |    2 | `OUT-M01`      | P0       | `DONE`     | L    | 없음                                                                                 | 불변 claim identity와 fenced 상태 전이                              |
 |    3 | `OUT-M02`      | P0       | `DONE`     | L    | `OUT-M01`, `OUT-M03`                                                                 | lease/heartbeat/recovery와 미시작 claim 반납                        |
@@ -181,10 +190,10 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 |   10 | `OUT-M09`      | P1       | `DONE`     | M    | `OUT-M03`                                                                            | LISTEN/NOTIFY degrade/reconnect lifecycle                           |
 |   11 | `OUT-M10`      | P1       | `DONE`     | M    | 없음                                                                                 | runtime option/state invariant validation                           |
 |   12 | `OUT-M11`      | P1       | `DONE`     | M    | 없음                                                                                 | `forRootAsync` DI와 async option 계약                               |
-|   13 | `OUT-M12`      | P1       | `EXTERNAL` | M    | GitHub repository/environment 관리자 인증                                            | release authorization, least privilege, immutable actions           |
+|   13 | `OUT-M12`      | P1       | `DONE` | M    | GitHub repository/environment 관리자 인증                                            | release authorization, least privilege, immutable actions           |
 |   14 | `OUT-M13`      | P1       | `DONE`     | M    | 없음                                                                                 | Prisma 5 지원 선언 증거 복구                                        |
 |   15 | `OUT-M14`      | P1       | `DONE`     | M    | 없음                                                                                 | Node LTS/Nest 12 현재 지원 정책                                     |
-|   16 | `OUT-M21`      | P1       | `BLOCKED`  | M    | `OUT-M12`                                                                            | pack-once, exact artifact publish/provenance                        |
+|   16 | `OUT-M21`      | P1       | `DONE`  | M    | `OUT-M12`                                                                            | pack-once, exact artifact publish/provenance                        |
 |   17 | `OUT-M15`      | P2       | `DONE`     | S    | `OUT-M01`                                                                            | hook의 불변성·commit 의미 문서화                                    |
 |   18 | `OUT-M16`      | P2       | `DONE`     | M    | 없음                                                                                 | envelope·JSON·bulk 입력 계약                                        |
 |   19 | `OUT-M17`      | P2       | `DONE`     | S    | 없음                                                                                 | ordering 비보장과 deterministic cursor 계약                         |
@@ -202,13 +211,13 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 |   27 | `OUT-M26`      | P2       | `DONE`    | S    | `OUT-M01–02`, `OUT-M08–09`, `OUT-M20A–C`                                             | critical branch coverage gate                                       |
 |   28 | `OUT-M27`      | P3       | `READY`    | M    | 없음                                                                                 | benchmark harness 복구                                              |
 |   29 | `OUT-M28`      | P3       | `DECISION` | S    | 없음                                                                                 | sourcemap/source packaging 계약                                     |
-|   30 | `OUT-M29`      | P3       | `BLOCKED`  | M    | `OUT-M02`, `OUT-M04A–05`, `OUT-M12`, `OUT-M18`                                       | SECURITY/support/operations runbook                                 |
-|   31 | `OUT-M30`      | P3       | `BLOCKED`  | M    | `OUT-M13–14`, `OUT-M21`                                                              | compatibility version manifest와 drift check                        |
+|   30 | `OUT-M29`      | P3       | `READY`  | M    | `OUT-M02`, `OUT-M04A–05`, `OUT-M12`, `OUT-M18`                                       | SECURITY/support/operations runbook                                 |
+|   31 | `OUT-M30`      | P3       | `READY`  | M    | `OUT-M13–14`, `OUT-M21`                                                              | compatibility version manifest와 drift check                        |
 |   32 | `OUT-M31`      | P3       | `BLOCKED`  | M    | `OUT-M01–11`                                                                         | poller 내부 책임 분리                                               |
-|   33 | `OUT-REL-01`   | release  | `BLOCKED`  | M    | `OUT-M01–03`, `OUT-M04A–B`, `OUT-M05`, `OUT-M09`, `OUT-M12–13`, `OUT-M19`, `OUT-M21` | next version/CHANGELOG/tag/publish                                  |
+|   33 | `OUT-REL-01`   | release  | `DONE`  | M    | `OUT-M01–03`, `OUT-M04A–B`, `OUT-M05`, `OUT-M09`, `OUT-M12–13`, `OUT-M19`, `OUT-M21` | next version/CHANGELOG/tag/publish                                  |
 |   34 | `TEN-ECO-NEXT` | 외부     | `EXTERNAL` | L    | `OUT-REL-01`, `JOBS-REL-01`                                                          | PostgreSQL Outbox → Redis/BullMQ fully-published crash/restart 검증 |
 
-먼저 `OUT-PLAN-01`을 끝낸다. 공개 보장 정정인 `OUT-M04A`를 즉시 처리하고, `OUT-M01`과 `OUT-M03`을 독립 PR로 진행한 뒤 둘을 rebase/merge한 최신 main에서 `OUT-M02`, 이어서 `OUT-M04B`를 수행한다. P0를 한 PR로 합치지 않는다.
+최초 계획은 plan-only bootstrap 뒤 P0를 독립 PR로 진행하는 순서였다. 실제 누적 변경은 사용자 승인으로 PR #18에 통합됐다. 이 이력은 별도 PR 완료로 간주하지 않으며, 이후 작업은 현재 큐와 §0.3 절차를 따른다.
 
 ### 2.1 파일과 첫 RED 행동
 
@@ -250,6 +259,8 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 | `OUT-M31`  | poller internals                                          | P0 contract tests를 refactor 전 고정하고 public API 변화 없는 extraction boundary를 ADR로 그린다.                                                          |
 
 ### 2.2 `OUT-PLAN-01` — 계획 bootstrap
+
+- 상태: `SUPERSEDED` — 별도 plan-only PR은 실행되지 않았다. PR #18이 계획과 누적 구현을 함께 main에 통합했으므로 bootstrap을 재실행하지 않는다. 아래는 최초 요구사항의 역사 기록이다.
 
 - 이 파일 하나만 path-scoped stage한 plan-only PR을 만든다. code, lockfile, 기존 docs를 함께 넣지 않는다.
 - reviewer가 기준 ref, 공개 release, P0 evidence, task dependency, destructive test guard를 확인한다.
@@ -454,18 +465,18 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 
 ### `OUT-M12` — release authorization과 least privilege
 
-- 상태: `P1 / EXTERNAL` — 2026-09-05 관리자 인증과 main/tag ruleset 적용을 확인했다. npm 환경 승인자 지정·Trusted Publisher 확인이 남아 있다. hardened workflow는 PR #18로 protected main 39e6b4f에 병합됐고 main CI 33935541658이 통과했다. branch remote dry-run도 통과했다. 상세: [OUT-REL-01](reports/2026-09-05-out-rel-01-release.md).
+- 상태: `P1 / DONE` — main/tag ruleset, 필수 CI, npm 지정 reviewer/tag-only deployment 정책을 적용했다. immutable v0.3.0에서 OIDC publish와 서명·provenance 검증을 완료했다. [최종 증거](reports/2026-09-05-out-rel-01-published.md).
 - 문제: manual dispatch 기본값이 publish이고 tag/version check는 tag push에만 적용된다. publish와 GitHub Release 권한도 같은 job 경계에 있고 Actions가 mutable major tag다.
 
 완료 조건:
 
-- [ ] 실제 publish는 protected main의 immutable matching `v*` tag만 허용한다. topic workflow의 tag/version/main ancestry 검증과 active main/tag ruleset(22309658/22309659, bypass 없음)은 확인했으나 hardened workflow의 protected main merge 및 main CI는 완료됐고 npm environment 적용이 남아 있다.
+- [x] 실제 publish는 protected main의 immutable matching `v*` tag만 허용한다. active main/tag ruleset 22309658/22309659(bypass 없음), tag/version/main ancestry 검사와 v0.3.0 실제 게시로 확인했다.
 - [x] manual dispatch는 dry-run only 또는 exact protected SHA/tag confirmation을 요구한다.
 - [x] actionlint 또는 repository-local workflow policy fixture로 manual publish 기본값, job-level permission, immutable action ref의 첫 RED를 자동 검증한다.
 - [x] npm publish job은 OIDC만, GitHub Release job은 contents write만 가져 서로의 고권한을 공유하지 않는다.
 - [x] verify jobs는 `contents: read`이며 write/OIDC가 없다.
 - [x] privileged third-party action과 official actions를 reviewed commit SHA로 pin한다.
-- [ ] main/tag ruleset, required CI, force-push/tag 이동 차단, npm environment review/deployment policy를 관리자 설정에서 기록한다.
+- [x] main/tag ruleset, 필수 CI 8개, force-push/tag 이동 차단을 기록했다. npm 환경은 reviewer `ksyq12`, admin bypass false, `v*.*.*` tag-only policy다. 단독 관리자가 시작·승인하므로 self-review는 허용한다.
 - [x] 관리자 설정 변경 전 read-only before-state와 대상 repo/environment를 캡처하고 명시적 권한 범위 안에서만 변경한다.
 - [x] settings 작업이 별도 권한 때문에 남으면 같은 ID를 `EXTERNAL`로 인계하고 코드 부분만 DONE 처리하지 않는다.
 
@@ -501,13 +512,13 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 
 ### `OUT-M21` — pack-once와 exact artifact publish
 
-- 상태: `P1 / BLOCKED`; 로컬 구현·PostgreSQL consumer 검증 완료, 선행 `OUT-M12`와 remote tag/publish 증거 대기
+- 상태: `P1 / DONE`; 실제 v0.3.0 pack-once publish, 동일 태그 rerun의 identical-byte skip, 별도 복구 검증의 서명·provenance 증거 완료. 원격 최종 parser 실패와 복구 경계는 아래 보고서에 명시한다.
 - [x] build-and-test job에서 tgz를 한 번 만들고 SRI/SHA-256/allowlist/size/root/types/SQL을 검사한 뒤 모든 Node 22 consumer가 같은 tgz를 사용한다.
 - [x] Node 24, manual dry-run, publish job은 rebuild/repack하지 않고 검증한 exact tgz와 metadata를 다운로드해 사용한다.
 - [x] publish 전 registry integrity를 비교하고 existing version은 동일 bytes일 때만 idempotent skip하며 다른 bytes면 fail한다.
 - [x] publish 뒤 npm signature와 verified publish/provenance statement에서 subject digest, repository, tag ref, source commit, workflow를 검사한 뒤에만 GitHub Release를 만든다.
 - [x] repository-local workflow policy test와 artifact graph/evidence report를 추가했다.
-- [ ] `OUT-M12` 보호 설정 뒤 manual remote run, 실제 next tag publish/attestation, immutable tag rerun 증거를 기록한다.
+- [x] manual remote dry-run 33933556228, protected v0.3.0 publish 33936720398 attempt 1, immutable tag rerun attempt 2의 identical-byte skip을 기록했다. 두 attempt의 원격 최종 검증 실패는 숨기지 않고 npm 12 parser 수정 및 동일 Node/npm의 서명·provenance 복구 검증을 [최종 증거](reports/2026-09-05-out-rel-01-published.md)에 기록했다.
 
 구현·로컬 증거: `docs/reports/2026-09-03-out-m21-pack-once.md`.
 
@@ -659,8 +670,8 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 
 ### `OUT-REL-01` — next release gate
 
-- 상태: `release / BLOCKED`; 선행 `OUT-M01–03`, `OUT-M04A–B`, `OUT-M05`, `OUT-M09`, `OUT-M12–13`, `OUT-M19`, `OUT-M21`
-- 2026-09-05: next version을 **0.3.0**으로 확정하고 manifest/lock, README upgrade checklist, versioned CHANGELOG 초안을 준비했다. main/tag ruleset을 적용했고 local A/B/C/D/E, 원격 CI 33933558624의 필수 8개 검사와 release dry-run 33933556228을 통과했다. protected main merge(PR #18, 39e6b4f)와 main CI 33935541658은 완료됐으며, npm 환경 승인자·Trusted Publisher 확인과 tag publish 증거는 아직 남아 있어 `DONE`이 아니다. [현재 증거와 후속 절차](reports/2026-09-05-out-rel-01-release.md).
+- 상태: `release / DONE`; 선행 `OUT-M01–03`, `OUT-M04A–B`, `OUT-M05`, `OUT-M09`, `OUT-M12–13`, `OUT-M19`, `OUT-M21`
+- 2026-09-05: **0.3.0** manifest/lock, README migration, CHANGELOG를 protected main에 반영하고 release commit `0e94c8d`를 immutable tag로 게시했다. npm 서명·provenance·integrity와 동일 태그 재실행의 publish skip을 확인한 뒤 [GitHub Release](https://github.com/nestarc/outbox/releases/tag/v0.3.0)를 생성했다. SHA-256 `56856c21d48199ced25ac7e79899294a0e9ba32fdd75a36bcdb889c33a6dc30c`. 자동 실행 실패와 npm 12 응답 parser 복구를 포함한 [최종 증거](reports/2026-09-05-out-rel-01-published.md).
 - `OUT-M01–03`, `OUT-M04A–B`, `OUT-M05`의 semver 메모를 종합해 schema/public behavior에 맞는 next version을 결정하고 manifest/README/CHANGELOG를 맞춘다.
 - `OUT-M12`의 authorization/least privilege, `OUT-M13`의 선언된 Prisma floor 증거, `OUT-M19`의 migration을 포함한 release commit에서 `OUT-M21`의 pack-once workflow를 실행한다.
 - 모든 선행 작업이 merge된 release commit에서 프로필 A/B/C/D/E와 P0 regression을 검증한 candidate tgz를 한 번만 만들고 그 exact artifact만 publish한다. 이전 task branch에서 만든 tgz를 재사용하지 않는다.
@@ -831,6 +842,7 @@ Outbox ── durable record / publisher callback ──> Jobs adapter ──> J
 | 2026-09-05 | `OUT-M26` | `DONE` | local `16e9fc2` → `codex/out-m26-critical-coverage` working tree | per-file gate, 212 unit/38 E2E on Nest 11/12, metadata tuple/hash and negative controls PASS | 변경 review 후 원격 CI artifact 확인; 다음 READY는 OUT-M27 |
 
 | 2026-09-05 | `OUT-REL-01` | `BLOCKED` | local `c14e71e` → `codex/out-rel-01-release-0-3-0` | 0.3.0 manifest/migration/CHANGELOG; 212 unit/38 E2E, all exact consumers/dry-run PASS; main/tag rulesets active | remote CI 8개/dry-run PASS; npm 환경 승인자·Trusted Publisher 확인 및 protected tag publish 필요 |
+| 2026-09-05 | `OUT-M12` / `OUT-M21` / `OUT-REL-01` | `DONE` | protected release `0e94c8d`, immutable `v0.3.0` | npm 0.3.0 publish; rerun same-byte skip; parser 복구 후 서명/provenance PASS; GitHub Release 생성 | tag 변경 없이 tooling fix/evidence PR 반영; OUT-M29/30 READY |
 
 ### `OUT-M01` 종료 인계
 
@@ -1322,3 +1334,18 @@ Next exact action: designate the npm environment reviewer and confirm Trusted Pu
 - `CHANGELOG.md`의 0.3.0 날짜를 2026-09-05로 확정한다. 이는 릴리스 준비 날짜이며 태그·npm·GitHub Release 게시 완료 증거를 대신하지 않는다.
 - read-only 재확인에서 `v0.3.0` tag/release는 없고 npm latest는 0.2.1이었다. main/tag ruleset은 active지만 npm environment는 reviewer 없음, admin bypass true, deployment ref policy null로 남아 있다.
 - 승인자 지정 답변 및 환경 보호 설정을 완료한 뒤 protected main의 최종 release commit에 `v0.3.0`을 생성한다. release workflow가 동일 artifact를 검증·게시하고 provenance를 확인한 후 GitHub Release를 생성해야 한다. 선행 확인 전에는 OUT-M12/OUT-M21/OUT-REL-01을 DONE으로 바꾸지 않는다.
+
+### `OUT-REL-01` 최종 게시·복구 종료 인계 — 2026-09-05
+
+```text
+Task: OUT-REL-01 (OUT-M12 / OUT-M21 external evidence closure 포함)
+State: DONE
+Start ref / end ref: local main c14e71ecbfec90601c9e6ad96f8c656ae59c1942 / published v0.3.0 commit 0e94c8df97bebb5cd85ee119a7608209a0c9e61b; 후속 tooling/evidence branch codex/out-rel-01-release-evidence
+Changed files: 앞선 package/README/CHANGELOG/CI 수정 + scripts/release-artifact.js npm 12 singleton response parser, workflow policy regression, maintenance plan, preparation report의 역사 표시, published report와 JSON/log evidence
+Contract / semver decision: 공개 버전 0.3.0. schema/public API migration은 README 준수. 후속 parser는 배포 도구만 수정하며 published bytes/tag/version 변경 없음.
+Commands and exact results: release main CI 33936492784 필수 8개+canary PASS; Node 22/24 release gates PASS (unit 212, PostgreSQL E2E 38, strict exact packed consumers); artifact 134 files/71,705 bytes, SHA256 56856c21d48199ced25ac7e79899294a0e9ba32fdd75a36bcdb889c33a6dc30c; attempt 1 npm publish SUCCESS; attempt 2 identical-byte skip SUCCESS, npm signature step SUCCESS; corrected parser + Node 24.15.0/npm 12.0.2 isolated npm audit signatures invalid=0/missing=0 and publish/provenance digest/repository/tag/commit/workflow verification PASS; workflow policy 20 immutable refs/lint/diff checks PASS.
+Unverified paths and reason: 원격 tag workflow는 attempt 1 registry visibility ETARGET, attempt 2 npm 12 dist singleton-array parser 오류로 최종 실패했고 GitHub Release job은 skipped였다. 자동 workflow 전체 PASS를 주장하지 않는다. 같은 tag를 다시 실행해도 old parser가 유지되므로 이후 release에는 수정이 포함되어야 한다.
+External PR, run, release evidence: PR #18/#19 merge; release run https://github.com/nestarc/outbox/actions/runs/33936720398; npm Trusted Publishing/provenance transparency log 2719081218; https://github.com/nestarc/outbox/releases/tag/v0.3.0 (동일 검증 조건 복구 통과 후 gh release create --verify-tag로 생성). 상세 JSON/audit bundle/log는 docs/reports/2026-09-05-out-rel-01-published/.
+Remaining risk: 최초 게시 직후 registry 전파 지연은 fail-closed 검증을 실패시킬 수 있다. attempt별 artifact 때문에 recovery는 full rerun 또는 명시적인 동일 artifact 검증이 필요하다. OUT-M22B dev-only Prisma 예외 만료 2026-10-04 유지. at-least-once/no-FIFO 및 Jobs/TEN-ECO-NEXT 범위는 변경 없음.
+Next exact action: 후속 tooling/evidence PR의 필수 CI 확인 후 protected main merge와 로컬 main 동기화. 다음 새 작업은 큐를 재확인하며 OUT-M29/OUT-M30 선행은 해소됐다.
+```

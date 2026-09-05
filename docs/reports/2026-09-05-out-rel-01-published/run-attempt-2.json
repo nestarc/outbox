@@ -1,0 +1,646 @@
+{
+  "attempt": 2,
+  "conclusion": "failure",
+  "databaseId": 33936720398,
+  "event": "push",
+  "headSha": "0e94c8df97bebb5cd85ee119a7608209a0c9e61b",
+  "jobs": [
+    {
+      "completedAt": "2026-09-05T01:46:53Z",
+      "conclusion": "success",
+      "databaseId": 101227222354,
+      "name": "Verify tag matches package.json",
+      "startedAt": "2026-09-05T01:46:43Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-05T01:46:45Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-05T01:46:44Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:46:46Z",
+          "conclusion": "success",
+          "name": "Checkout",
+          "number": 2,
+          "startedAt": "2026-09-05T01:46:45Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:46:50Z",
+          "conclusion": "success",
+          "name": "Setup Node",
+          "number": 3,
+          "startedAt": "2026-09-05T01:46:46Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:46:50Z",
+          "conclusion": "success",
+          "name": "Read package version",
+          "number": 4,
+          "startedAt": "2026-09-05T01:46:50Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:46:50Z",
+          "conclusion": "success",
+          "name": "Authorize immutable release ref",
+          "number": 5,
+          "startedAt": "2026-09-05T01:46:50Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:46:50Z",
+          "conclusion": "success",
+          "name": "Post Setup Node",
+          "number": 9,
+          "startedAt": "2026-09-05T01:46:50Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:46:50Z",
+          "conclusion": "success",
+          "name": "Post Checkout",
+          "number": 10,
+          "startedAt": "2026-09-05T01:46:50Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:46:51Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 11,
+          "startedAt": "2026-09-05T01:46:50Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/nestarc/outbox/actions/runs/33936720398/job/101227222354"
+    },
+    {
+      "completedAt": "2026-09-05T01:51:25Z",
+      "conclusion": "success",
+      "databaseId": 101227250066,
+      "name": "Full prepublishOnly chain",
+      "startedAt": "2026-09-05T01:46:55Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-05T01:46:57Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-05T01:46:56Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:47:11Z",
+          "conclusion": "success",
+          "name": "Initialize containers",
+          "number": 2,
+          "startedAt": "2026-09-05T01:46:57Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:47:13Z",
+          "conclusion": "success",
+          "name": "Checkout",
+          "number": 3,
+          "startedAt": "2026-09-05T01:47:11Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:47:16Z",
+          "conclusion": "success",
+          "name": "Setup Node",
+          "number": 4,
+          "startedAt": "2026-09-05T01:47:13Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:47:25Z",
+          "conclusion": "success",
+          "name": "Install dependencies",
+          "number": 5,
+          "startedAt": "2026-09-05T01:47:16Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:47:38Z",
+          "conclusion": "success",
+          "name": "Clean + lint + unit test + build",
+          "number": 6,
+          "startedAt": "2026-09-05T01:47:25Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:47:38Z",
+          "conclusion": "success",
+          "name": "Compatibility policy",
+          "number": 7,
+          "startedAt": "2026-09-05T01:47:38Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:47:38Z",
+          "conclusion": "success",
+          "name": "Workflow policy",
+          "number": 8,
+          "startedAt": "2026-09-05T01:47:38Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:47:38Z",
+          "conclusion": "success",
+          "name": "Production dependency audit",
+          "number": 9,
+          "startedAt": "2026-09-05T01:47:38Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:47:57Z",
+          "conclusion": "success",
+          "name": "Prisma 7.10.0 PostgreSQL E2E",
+          "number": 10,
+          "startedAt": "2026-09-05T01:47:38Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:48:02Z",
+          "conclusion": "success",
+          "name": "Critical unit coverage gate",
+          "number": 11,
+          "startedAt": "2026-09-05T01:47:57Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:48:03Z",
+          "conclusion": "success",
+          "name": "Upload critical coverage evidence",
+          "number": 12,
+          "startedAt": "2026-09-05T01:48:02Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:48:04Z",
+          "conclusion": "success",
+          "name": "Pack and verify the release artifact once",
+          "number": 13,
+          "startedAt": "2026-09-05T01:48:03Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:49:00Z",
+          "conclusion": "success",
+          "name": "Strict packed README examples with and without optional pg",
+          "number": 14,
+          "startedAt": "2026-09-05T01:48:04Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:49:11Z",
+          "conclusion": "success",
+          "name": "Strict packed package exports consumer without optional pg",
+          "number": 15,
+          "startedAt": "2026-09-05T01:49:00Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:49:35Z",
+          "conclusion": "success",
+          "name": "Strict packed NestJS 11.2.3 + Prisma 7.10.0 consumer",
+          "number": 16,
+          "startedAt": "2026-09-05T01:49:11Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:50:01Z",
+          "conclusion": "success",
+          "name": "Strict packed NestJS 12.0.1 + Schedule 12.0.1 + Prisma 7.10.0 consumer",
+          "number": 17,
+          "startedAt": "2026-09-05T01:49:35Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:50:18Z",
+          "conclusion": "success",
+          "name": "Strict packed NestJS 10.4.22 + Prisma 5.22.0 consumer",
+          "number": 18,
+          "startedAt": "2026-09-05T01:50:01Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:50:40Z",
+          "conclusion": "success",
+          "name": "Strict packed NestJS 10.4.22 + Prisma 6.19.3 consumer",
+          "number": 19,
+          "startedAt": "2026-09-05T01:50:18Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:50:54Z",
+          "conclusion": "success",
+          "name": "Install exact legacy NestJS 10.4.22 + Prisma 6.19.3 tuple",
+          "number": 20,
+          "startedAt": "2026-09-05T01:50:40Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:50:54Z",
+          "conclusion": "success",
+          "name": "Assert exact legacy runtime tuple",
+          "number": 21,
+          "startedAt": "2026-09-05T01:50:54Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:51:00Z",
+          "conclusion": "success",
+          "name": "Legacy unit tests",
+          "number": 22,
+          "startedAt": "2026-09-05T01:50:54Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:51:20Z",
+          "conclusion": "success",
+          "name": "Legacy Prisma 6.19.3 PostgreSQL E2E",
+          "number": 23,
+          "startedAt": "2026-09-05T01:51:00Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:51:20Z",
+          "conclusion": "success",
+          "name": "Re-verify exact release artifact after all gates",
+          "number": 24,
+          "startedAt": "2026-09-05T01:51:20Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:51:22Z",
+          "conclusion": "success",
+          "name": "Upload exact release artifact",
+          "number": 25,
+          "startedAt": "2026-09-05T01:51:20Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:51:22Z",
+          "conclusion": "success",
+          "name": "Post Setup Node",
+          "number": 48,
+          "startedAt": "2026-09-05T01:51:22Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:51:22Z",
+          "conclusion": "success",
+          "name": "Post Checkout",
+          "number": 49,
+          "startedAt": "2026-09-05T01:51:22Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:51:23Z",
+          "conclusion": "success",
+          "name": "Stop containers",
+          "number": 50,
+          "startedAt": "2026-09-05T01:51:22Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:51:23Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 51,
+          "startedAt": "2026-09-05T01:51:23Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/nestarc/outbox/actions/runs/33936720398/job/101227250066"
+    },
+    {
+      "completedAt": "2026-09-05T01:53:06Z",
+      "conclusion": "success",
+      "databaseId": 101227892974,
+      "name": "Node 24 + NestJS 12 compatibility",
+      "startedAt": "2026-09-05T01:51:27Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-05T01:51:29Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-05T01:51:28Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:51:42Z",
+          "conclusion": "success",
+          "name": "Initialize containers",
+          "number": 2,
+          "startedAt": "2026-09-05T01:51:29Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:51:42Z",
+          "conclusion": "success",
+          "name": "Checkout",
+          "number": 3,
+          "startedAt": "2026-09-05T01:51:42Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:51:43Z",
+          "conclusion": "success",
+          "name": "Setup Node 24",
+          "number": 4,
+          "startedAt": "2026-09-05T01:51:42Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:51:44Z",
+          "conclusion": "success",
+          "name": "Download exact release artifact",
+          "number": 5,
+          "startedAt": "2026-09-05T01:51:43Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:51:44Z",
+          "conclusion": "success",
+          "name": "Verify exact release artifact",
+          "number": 6,
+          "startedAt": "2026-09-05T01:51:44Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:52:40Z",
+          "conclusion": "success",
+          "name": "Strict packed README examples with and without optional pg",
+          "number": 7,
+          "startedAt": "2026-09-05T01:51:44Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:53:04Z",
+          "conclusion": "success",
+          "name": "Strict packed NestJS 12.0.1 + Schedule 12.0.1 + Prisma 7.10.0 consumer",
+          "number": 8,
+          "startedAt": "2026-09-05T01:52:40Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:53:04Z",
+          "conclusion": "success",
+          "name": "Post Setup Node 24",
+          "number": 14,
+          "startedAt": "2026-09-05T01:53:04Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:53:04Z",
+          "conclusion": "success",
+          "name": "Post Checkout",
+          "number": 15,
+          "startedAt": "2026-09-05T01:53:04Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:53:05Z",
+          "conclusion": "success",
+          "name": "Stop containers",
+          "number": 16,
+          "startedAt": "2026-09-05T01:53:04Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:53:05Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 17,
+          "startedAt": "2026-09-05T01:53:05Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/nestarc/outbox/actions/runs/33936720398/job/101227892974"
+    },
+    {
+      "completedAt": "2026-09-05T01:54:01Z",
+      "conclusion": "success",
+      "databaseId": 101228123464,
+      "name": "Publish to npm",
+      "startedAt": "2026-09-05T01:53:52Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-05T01:53:54Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-05T01:53:53Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:53:55Z",
+          "conclusion": "success",
+          "name": "Checkout",
+          "number": 2,
+          "startedAt": "2026-09-05T01:53:54Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:53:56Z",
+          "conclusion": "success",
+          "name": "Setup Node with npm registry",
+          "number": 3,
+          "startedAt": "2026-09-05T01:53:55Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:53:56Z",
+          "conclusion": "success",
+          "name": "Show npm version",
+          "number": 4,
+          "startedAt": "2026-09-05T01:53:56Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:53:57Z",
+          "conclusion": "success",
+          "name": "Download exact release artifact",
+          "number": 5,
+          "startedAt": "2026-09-05T01:53:56Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:53:57Z",
+          "conclusion": "success",
+          "name": "Verify exact release artifact",
+          "number": 6,
+          "startedAt": "2026-09-05T01:53:57Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:53:58Z",
+          "conclusion": "success",
+          "name": "Check whether this exact version already exists",
+          "number": 7,
+          "startedAt": "2026-09-05T01:53:57Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:53:58Z",
+          "conclusion": "skipped",
+          "name": "Publish",
+          "number": 8,
+          "startedAt": "2026-09-05T01:53:58Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:53:58Z",
+          "conclusion": "success",
+          "name": "Post Setup Node with npm registry",
+          "number": 15,
+          "startedAt": "2026-09-05T01:53:58Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:53:58Z",
+          "conclusion": "success",
+          "name": "Post Checkout",
+          "number": 16,
+          "startedAt": "2026-09-05T01:53:58Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:53:58Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 17,
+          "startedAt": "2026-09-05T01:53:58Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/nestarc/outbox/actions/runs/33936720398/job/101228123464"
+    },
+    {
+      "completedAt": "2026-09-05T01:53:06Z",
+      "conclusion": "skipped",
+      "databaseId": 101228123940,
+      "name": "Manual npm publish dry-run",
+      "startedAt": "2026-09-05T01:53:07Z",
+      "status": "completed",
+      "steps": [],
+      "url": "https://github.com/nestarc/outbox/actions/runs/33936720398/job/101228123940"
+    },
+    {
+      "completedAt": "2026-09-05T01:54:40Z",
+      "conclusion": "failure",
+      "databaseId": 101228243910,
+      "name": "Verify published integrity and provenance",
+      "startedAt": "2026-09-05T01:54:04Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-05T01:54:07Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-05T01:54:05Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:54:09Z",
+          "conclusion": "success",
+          "name": "Checkout verification code",
+          "number": 2,
+          "startedAt": "2026-09-05T01:54:07Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:54:15Z",
+          "conclusion": "success",
+          "name": "Setup Node with npm registry",
+          "number": 3,
+          "startedAt": "2026-09-05T01:54:09Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:54:17Z",
+          "conclusion": "success",
+          "name": "Download exact release artifact",
+          "number": 4,
+          "startedAt": "2026-09-05T01:54:15Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:54:17Z",
+          "conclusion": "success",
+          "name": "Verify exact release artifact",
+          "number": 5,
+          "startedAt": "2026-09-05T01:54:17Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:54:35Z",
+          "conclusion": "success",
+          "name": "Install published package and verify npm signatures",
+          "number": 6,
+          "startedAt": "2026-09-05T01:54:17Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:54:36Z",
+          "conclusion": "failure",
+          "name": "Verify registry integrity and provenance subject/ref/digest",
+          "number": 7,
+          "startedAt": "2026-09-05T01:54:35Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:54:36Z",
+          "conclusion": "skipped",
+          "name": "Post Setup Node with npm registry",
+          "number": 13,
+          "startedAt": "2026-09-05T01:54:36Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:54:36Z",
+          "conclusion": "success",
+          "name": "Post Checkout verification code",
+          "number": 14,
+          "startedAt": "2026-09-05T01:54:36Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-05T01:54:36Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 15,
+          "startedAt": "2026-09-05T01:54:36Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/nestarc/outbox/actions/runs/33936720398/job/101228243910"
+    },
+    {
+      "completedAt": "2026-09-05T01:54:40Z",
+      "conclusion": "skipped",
+      "databaseId": 101228334442,
+      "name": "Create GitHub Release",
+      "startedAt": "2026-09-05T01:54:41Z",
+      "status": "completed",
+      "steps": [],
+      "url": "https://github.com/nestarc/outbox/actions/runs/33936720398/job/101228334442"
+    }
+  ],
+  "status": "completed",
+  "url": "https://github.com/nestarc/outbox/actions/runs/33936720398"
+}

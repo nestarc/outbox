@@ -2,7 +2,23 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { decodeStatements } = require('./release-artifact');
+const { decodeStatements, parseNpmView } = require('./release-artifact');
+
+// Exact-version npm view changed from an object/scalar to a singleton array
+// in npm 12. Accept either shape, but never select from ambiguous results.
+const registryDist = {
+  integrity: 'sha512-example',
+  attestations: {
+    provenance: { predicateType: 'https://slsa.dev/provenance/v1' },
+  },
+};
+for (const value of [registryDist, registryDist.integrity]) {
+  assert.deepEqual(parseNpmView(JSON.stringify(value)), value);
+  assert.deepEqual(parseNpmView(JSON.stringify([value])), value);
+}
+assert.throws(() => parseNpmView('[]'), /exactly one/);
+assert.throws(() => parseNpmView('[{}, {}]'), /exactly one/);
+assert.throws(() => parseNpmView('{invalid'), SyntaxError);
 
 const workflowPath = path.resolve(
   __dirname,

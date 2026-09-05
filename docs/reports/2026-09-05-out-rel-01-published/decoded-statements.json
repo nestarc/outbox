@@ -1,0 +1,69 @@
+{
+  "note": "Decoded public registry statements; cryptographic verification is performed by the release workflow npm audit signatures gate.",
+  "statements": [
+    {
+      "_type": "https://in-toto.io/Statement/v0.1",
+      "subject": [
+        {
+          "name": "pkg:npm/%40nestarc/outbox@0.3.0",
+          "digest": {
+            "sha512": "adb3e20e0402355b5089f55fd35c1efaf4446030f071ca5ecdce5c4a56a86bc55e216dcdc66196acc7bc71cc1045ec7fa45d8cc65156e0aeb8e520db376edebd"
+          }
+        }
+      ],
+      "predicateType": "https://github.com/npm/attestation/tree/main/specs/publish/v0.1",
+      "predicate": {
+        "name": "@nestarc/outbox",
+        "version": "0.3.0",
+        "registry": "https://registry.npmjs.org"
+      }
+    },
+    {
+      "_type": "https://in-toto.io/Statement/v1",
+      "subject": [
+        {
+          "name": "pkg:npm/%40nestarc/outbox@0.3.0",
+          "digest": {
+            "sha512": "adb3e20e0402355b5089f55fd35c1efaf4446030f071ca5ecdce5c4a56a86bc55e216dcdc66196acc7bc71cc1045ec7fa45d8cc65156e0aeb8e520db376edebd"
+          }
+        }
+      ],
+      "predicateType": "https://slsa.dev/provenance/v1",
+      "predicate": {
+        "buildDefinition": {
+          "buildType": "https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1",
+          "externalParameters": {
+            "workflow": {
+              "ref": "refs/tags/v0.3.0",
+              "repository": "https://github.com/nestarc/outbox",
+              "path": ".github/workflows/release.yml"
+            }
+          },
+          "internalParameters": {
+            "github": {
+              "event_name": "push",
+              "repository_id": "1207016548",
+              "repository_owner_id": "273532322"
+            }
+          },
+          "resolvedDependencies": [
+            {
+              "uri": "git+https://github.com/nestarc/outbox@refs/tags/v0.3.0",
+              "digest": {
+                "gitCommit": "0e94c8df97bebb5cd85ee119a7608209a0c9e61b"
+              }
+            }
+          ]
+        },
+        "runDetails": {
+          "builder": {
+            "id": "https://github.com/actions/runner/github-hosted"
+          },
+          "metadata": {
+            "invocationId": "https://github.com/nestarc/outbox/actions/runs/33936720398/attempts/1"
+          }
+        }
+      }
+    }
+  ]
+}

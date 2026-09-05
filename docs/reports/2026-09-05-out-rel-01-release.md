@@ -1,7 +1,9 @@
 # OUT-REL-01 — 0.3.0 release preparation and evidence
 
 - Date/owner: 2026-09-05 (Asia/Seoul), Codex.
-- Status: **BLOCKED — publication has not occurred.**
+- Status: **Historical preparation record.** Publication progress and final
+  verification are tracked in the [publication report](2026-09-05-out-rel-01-published.md).
+  Baselines and blockers below describe the preparation stage.
 - Start: clean local `main@c14e71ecbfec90601c9e6ad96f8c656ae59c1942`.
 - Branch: `codex/out-rel-01-release-0-3-0`, created from fetched `origin/main`
   and fast-forwarded to local main to preserve all 32 unpublished prerequisite

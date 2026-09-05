@@ -1,0 +1,26 @@
+{
+  "version": "0.3.0",
+  "dist": {
+    "shasum": "9df5955b75b5a61b37977f57327884ac4380e6c9",
+    "tarball": "https://registry.npmjs.org/@nestarc/outbox/-/outbox-0.3.0.tgz",
+    "fileCount": 134,
+    "integrity": "sha512-rbPiDgQCNVtQifVf01we+vREYDDwccpezc5cSlaoa8VeIW3NxmGWrMe8ccwQRex/pF2MxlFW4K645SDbN27evQ==",
+    "signatures": [
+      {
+        "sig": "MEQCICNDJ4H5xFsx+Za46GcNRgmvaAh5xxleMIaoUR55EWa4AiAtnQm0RvAid51eqXX0I+x5pP015zEqiiNSMtUEVYZopg==",
+        "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
+      },
+      {
+        "keyid": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+        "sig": "MEQCICr/dW9d892aBbDnCr/ZFxuRXz8ml4o6cyjFPdCPbzBNAiBC+XxdpF5n+Pn6QLuePW8ga2b30M+It4rO233J7rn2Ig=="
+      }
+    ],
+    "attestations": {
+      "url": "https://registry.npmjs.org/-/npm/v1/attestations/@nestarc%2foutbox@0.3.0",
+      "provenance": {
+        "predicateType": "https://slsa.dev/provenance/v1"
+      }
+    },
+    "unpackedSize": 325468
+  }
+}
