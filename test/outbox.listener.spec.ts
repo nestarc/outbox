@@ -40,6 +40,136 @@ function createPoller(): jest.Mocked<Pick<OutboxPoller, 'requestPoll'>> {
 }
 
 describe('OutboxListener', () => {
+  it('coalesces overlapping initialization and closes the previous client before replacement', async () => {
+    const first = createClient();
+    const second = createClient();
+    let finish!: () => void;
+    const barrier = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    first.client.connect.mockReturnValueOnce(barrier);
+    const factory = jest
+      .fn()
+      .mockReturnValueOnce(first.client)
+      .mockImplementationOnce(() => {
+        expect(first.client.end).toHaveBeenCalledTimes(1);
+        return second.client;
+      });
+    const listener = new OutboxListener(
+      { prisma: {}, wakeup: { enabled: true, clientFactory: factory } },
+      createPoller(),
+    );
+    const firstInit = listener.onModuleInit();
+    const overlappingInit = listener.onModuleInit();
+    finish();
+    await Promise.all([firstInit, overlappingInit]);
+    expect(factory).toHaveBeenCalledTimes(1);
+    await listener.onModuleInit();
+    expect(second.client.query).toHaveBeenCalledTimes(1);
+    await listener.onApplicationShutdown();
+    expect(second.client.end).toHaveBeenCalledTimes(1);
+  });
+  it.each(['connect', 'query'] as const)(
+    'fences shutdown during %s and closes the client only once',
+    async (phase) => {
+      jest.useFakeTimers();
+      const { client, handlers } = createClient();
+      let enter!: () => void;
+      const entered = new Promise<void>((resolve) => {
+        enter = resolve;
+      });
+      let finish!: () => void;
+      const barrier = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      client[phase].mockImplementationOnce(async () => {
+        enter();
+        await barrier;
+      });
+      const poller = createPoller();
+      const factory = jest.fn(() => client);
+      const listener = new OutboxListener(
+        { prisma: {}, wakeup: { enabled: true, clientFactory: factory } },
+        poller,
+      );
+      const initialization = listener.onModuleInit();
+      await entered;
+      const shutdown = listener.onApplicationShutdown();
+      finish();
+      await Promise.all([initialization, shutdown]);
+      handlers.notification[0]({ channel: 'outbox_events' });
+      expect(poller.requestPoll).not.toHaveBeenCalled();
+      expect(client.end).toHaveBeenCalledTimes(1);
+      if (phase === 'connect') expect(client.query).not.toHaveBeenCalled();
+      expect(jest.getTimerCount()).toBe(0);
+      expect(factory).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('continues reconnect after listener removal and close reject with non-Error values', async () => {
+    jest.useFakeTimers();
+    const first = createClient();
+    const second = createClient();
+    first.client.off = jest.fn(() => {
+      throw 'cleanup unavailable';
+    });
+    first.client.end.mockRejectedValue('close unavailable');
+    const factory = jest
+      .fn()
+      .mockReturnValueOnce(first.client)
+      .mockReturnValue(second.client);
+    const poller = createPoller();
+    const listener = new OutboxListener(
+      {
+        prisma: {},
+        wakeup: { enabled: true, reconnectDelay: 50, clientFactory: factory },
+      },
+      poller,
+    );
+    await listener.onModuleInit();
+    first.handlers.error[0]('socket closed');
+    await jest.advanceTimersByTimeAsync(50);
+    expect(second.client.query).toHaveBeenCalledWith('LISTEN "outbox_events"');
+    first.handlers.notification[0]({ channel: 'outbox_events' });
+    second.handlers.notification[0]({ channel: 'outbox_events' });
+    expect(poller.requestPoll).toHaveBeenCalledTimes(1);
+    await listener.onApplicationShutdown();
+    expect(first.client.end).toHaveBeenCalledTimes(1);
+    expect(second.client.end).toHaveBeenCalledTimes(1);
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it('does not reconnect after shutdown while the reconnect client factory is pending', async () => {
+    jest.useFakeTimers();
+    const first = createClient();
+    const second = createClient();
+    let finish!: (client: OutboxNotificationClient) => void;
+    const barrier = new Promise<OutboxNotificationClient>((resolve) => {
+      finish = resolve;
+    });
+    const factory = jest
+      .fn()
+      .mockReturnValueOnce(first.client)
+      .mockReturnValueOnce(barrier);
+    const listener = new OutboxListener(
+      {
+        prisma: {},
+        wakeup: { enabled: true, reconnectDelay: 50, clientFactory: factory },
+      },
+      createPoller(),
+    );
+    await listener.onModuleInit();
+    first.handlers.end[0](undefined);
+    await jest.advanceTimersByTimeAsync(50);
+    expect(factory).toHaveBeenCalledTimes(2);
+    const shutdown = listener.onApplicationShutdown();
+    finish(second.client);
+    await shutdown;
+    expect(second.client.connect).not.toHaveBeenCalled();
+    expect(second.client.end).toHaveBeenCalledTimes(1);
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
   afterEach(() => {
     jest.useRealTimers();
   });

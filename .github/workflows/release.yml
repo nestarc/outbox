@@ -143,11 +143,25 @@ jobs:
       - name: Compatibility policy
         run: npm run test:compatibility-policy
 
+      - name: Workflow policy
+        run: npm run test:workflow-policy
+
       - name: Production dependency audit
         run: npm run audit:production
 
       - name: Prisma 7.10.0 PostgreSQL E2E
         run: npm run test:e2e
+
+      - name: Critical unit coverage gate
+        run: npm run test:cov
+
+      - name: Upload critical coverage evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-${{ github.sha }}-node22-locked-runtime-${{ github.run_attempt }}
+          path: coverage/
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Pack and verify the release artifact once
         run: node scripts/release-artifact.js pack release-artifact

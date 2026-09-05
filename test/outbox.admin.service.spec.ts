@@ -51,6 +51,78 @@ function createService(prisma = createMockPrisma()): {
 }
 
 describe('OutboxAdminService', () => {
+  it.each(['retry', 'markFailed'] as const)(
+    'rejects an unknown %s CAS result instead of claiming success',
+    async (method) => {
+      const { service, prisma } = createService();
+      prisma.$queryRawUnsafe.mockResolvedValue([{ outcome: 'unexpected' }]);
+      await expect(
+        method === 'retry'
+          ? service.retry('evt-1')
+          : service.markFailed('evt-1', 'manual stop'),
+      ).rejects.toThrow('Unknown outbox admin mutation outcome');
+    },
+  );
+
+  it('binds every operator page filter and keeps tenant-scoped pages inside their boundary', async () => {
+    const { service, prisma } = createService();
+    prisma.$queryRawUnsafe.mockResolvedValue([]);
+    const after = new Date('2026-01-01T00:00:00Z');
+    const before = new Date('2026-02-01T00:00:00Z');
+    await service.listPage({
+      status: 'FAILED',
+      eventType: 'order.created',
+      tenantId: 'tenant-a',
+      after,
+      before,
+    });
+    const [sql, ...values] = prisma.$queryRawUnsafe.mock.calls[0];
+    expect(sql).toContain('status = $1');
+    expect(sql).toContain('event_type = $2');
+    expect(sql).toContain('tenant_id = $3');
+    expect(sql).toContain('created_at >= $4');
+    expect(sql).toContain('created_at < $5');
+    expect(values).toEqual([
+      'FAILED',
+      'order.created',
+      'tenant-a',
+      after,
+      before,
+      51,
+    ]);
+    await new OutboxTenantAdminService({ prisma })
+      .forTenant('tenant-b')
+      .listPage();
+    const [tenantSql, ...tenantValues] = prisma.$queryRawUnsafe.mock.calls[1];
+    expect(tenantSql).toContain('tenant_id = $1');
+    expect(tenantValues).toEqual(['tenant-b', 51]);
+  });
+
+  it.each([
+    '',
+    ' ',
+    'e30=',
+    Buffer.from('null').toString('base64url'),
+    ...['invalid', '2026-01-01'].map((createdAt) =>
+      Buffer.from(
+        JSON.stringify({
+          v: 1,
+          order: 'created_at_desc_id_desc',
+          id: '00000000-0000-4000-8000-000000000001',
+          createdAt,
+        }),
+      ).toString('base64url'),
+    ),
+  ])(
+    'rejects noncanonical or invalid-date cursor %j before querying',
+    async (cursor) => {
+      const { service, prisma } = createService();
+      await expect(service.listPage({ cursor })).rejects.toMatchObject({
+        code: 'OUTBOX_INVALID_CURSOR',
+      });
+      expect(prisma.$queryRawUnsafe).not.toHaveBeenCalled();
+    },
+  );
   it('should return status counts and oldest pending/processing ages', async () => {
     const { service, prisma } = createService();
     prisma.$queryRaw.mockResolvedValue([

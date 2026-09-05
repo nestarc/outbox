@@ -168,6 +168,74 @@ describe('OutboxPoller', () => {
   });
 
   describe('poll', () => {
+    it('does not emit success hooks when the no-handler FAILED CAS loses ownership', async () => {
+      const prisma = createMockPrisma([createRecord()]);
+      prisma.$executeRaw.mockResolvedValue(0);
+      const hooks = { onDispatchSuccess: jest.fn(), onDeadLetter: jest.fn() };
+      await createPoller({ prisma, options: { hooks } }).poll();
+      expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+      expect(prisma.$executeRaw.mock.calls[0][0].join('')).toContain(
+        "status = 'FAILED'",
+      );
+      expect(hooks.onDispatchSuccess).not.toHaveBeenCalled();
+      expect(hooks.onDeadLetter).not.toHaveBeenCalled();
+    });
+
+    it('normalizes a non-Error publisher rejection into the persisted retry error', async () => {
+      const prisma = createMockPrisma([createRecord()]);
+      const onRetryScheduled = jest.fn();
+      await createPoller({
+        prisma,
+        transport: { publish: jest.fn().mockRejectedValue('broker offline') },
+        options: {
+          delivery: { mode: 'publisher' },
+          hooks: { onRetryScheduled },
+        },
+      }).poll();
+      expect(prisma.$executeRaw.mock.calls[0]).toContain('broker offline');
+      expect(onRetryScheduled).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: expect.objectContaining({ message: 'broker offline' }),
+          retryCount: 1,
+        }),
+      );
+    });
+
+    it('waits for an in-flight heartbeat and suppresses overlapping renewals before SENT', async () => {
+      jest.useFakeTimers();
+      const prisma = createMockPrisma([createRecord()]);
+      let renew!: (rows: number) => void;
+      const renewal = new Promise<number>((resolve) => {
+        renew = resolve;
+      });
+      prisma.$executeRaw.mockReturnValueOnce(renewal);
+      let finish!: () => void;
+      const dispatch = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      const onDispatchSuccess = jest.fn();
+      const poller = createPoller({
+        prisma,
+        transport: { publish: jest.fn(() => dispatch) },
+        options: {
+          delivery: { mode: 'publisher' },
+          hooks: { onDispatchSuccess },
+          lease: { duration: 300, heartbeatInterval: 100 },
+        },
+      });
+      const pending = poller.poll();
+      await jest.advanceTimersByTimeAsync(300);
+      expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+      finish();
+      await jest.advanceTimersByTimeAsync(0);
+      expect(onDispatchSuccess).not.toHaveBeenCalled();
+      expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+      renew(1);
+      await pending;
+      expect(prisma.$executeRaw).toHaveBeenCalledTimes(2);
+      expect(onDispatchSuccess).toHaveBeenCalledTimes(1);
+      expect(jest.getTimerCount()).toBe(0);
+    });
     it.each([
       ['status', { status: 'CORRUPT' }],
       ['retry count', { retryCount: -1 }],
@@ -1177,36 +1245,40 @@ describe('OutboxPoller', () => {
       );
     });
 
-    it('releases a claim fetched after shutdown starts without dispatching it', async () => {
-      const record = createRecord();
-      let releaseFetch!: () => void;
-      const fetchBarrier = new Promise<void>((resolve) => {
-        releaseFetch = resolve;
-      });
-      const prisma = createMockPrisma();
-      prisma.$queryRaw.mockImplementation(async () => {
-        await fetchBarrier;
-        return [record];
-      });
-      const publisher = { publish: jest.fn().mockResolvedValue(undefined) };
-      const poller = createPoller({
-        prisma,
-        transport: publisher,
-        options: { delivery: { mode: 'publisher' } },
-      });
+    it.each([0, 1])(
+      'releases a claim fetched after shutdown starts without dispatching it (CAS rows=%i)',
+      async (rows) => {
+        const record = createRecord();
+        let releaseFetch!: () => void;
+        const fetchBarrier = new Promise<void>((resolve) => {
+          releaseFetch = resolve;
+        });
+        const prisma = createMockPrisma();
+        prisma.$queryRaw.mockImplementation(async () => {
+          await fetchBarrier;
+          return [record];
+        });
+        const publisher = { publish: jest.fn().mockResolvedValue(undefined) };
+        const poller = createPoller({
+          prisma,
+          transport: publisher,
+          options: { delivery: { mode: 'publisher' } },
+        });
 
-      const inFlight = poller.poll();
-      const shutdown = poller.onApplicationShutdown();
-      releaseFetch();
-      await Promise.all([inFlight, shutdown]);
+        prisma.$executeRaw.mockResolvedValue(rows);
+        const inFlight = poller.poll();
+        const shutdown = poller.onApplicationShutdown();
+        releaseFetch();
+        await Promise.all([inFlight, shutdown]);
 
-      expect(publisher.publish).not.toHaveBeenCalled();
-      expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
-      const releaseSql = prisma.$executeRaw.mock.calls[0][0].join('');
-      expect(releaseSql).toContain("SET status = 'PENDING'");
-      expect(releaseSql).toContain('claim_token = NULL');
-      expect(releaseSql).toContain('lease_expires_at = NULL');
-    });
+        expect(publisher.publish).not.toHaveBeenCalled();
+        expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+        const releaseSql = prisma.$executeRaw.mock.calls[0][0].join('');
+        expect(releaseSql).toContain("SET status = 'PENDING'");
+        expect(releaseSql).toContain('claim_token = NULL');
+        expect(releaseSql).toContain('lease_expires_at = NULL');
+      },
+    );
   });
 
   describe('lease option invariants', () => {

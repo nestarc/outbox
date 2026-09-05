@@ -78,6 +78,36 @@ assert.match(buildAndTest, /node-version: '22'/);
 assert.match(buildAndTest, /npm run test:nest12-consumer/);
 assert.match(buildAndTest, /node scripts\/test-package-exports\.js/);
 assert.match(buildAndTest, /npm run audit:production/);
+assert.match(buildAndTest, /run: npm run test:cov/);
+assert.ok(
+  buildAndTest.indexOf('run: npm run test:cov') <
+    buildAndTest.indexOf('node scripts/release-artifact.js pack'),
+  'critical coverage must pass before the release candidate is packed',
+);
+assert.match(
+  buildAndTest,
+  /name: coverage-\$\{\{ github\.sha \}\}-node22-locked-runtime-\$\{\{ github\.run_attempt \}\}/,
+);
+const ci = fs.readFileSync(
+  path.resolve(__dirname, '..', '.github/workflows/ci.yml'),
+  'utf8',
+);
+assert.match(ci, /run: npm run test:cov/);
+assert.match(
+  ci,
+  /name: coverage-\$\{\{ github\.sha \}\}-node\$\{\{ matrix\.node \}\}-nest\$\{\{ matrix\.nestjs \}\}-prisma\$\{\{ matrix\.prisma \}\}-\$\{\{ github\.run_attempt \}\}/,
+);
+for (const definition of [ci, buildAndTest]) {
+  assert.match(definition, /run: npm run test:e2e/);
+  assert.doesNotMatch(
+    definition,
+    /continue-on-error: true[\s\S]*run: npm run test:cov/,
+  );
+}
+assert.equal(
+  require('../package.json').scripts['test:cov'],
+  'node scripts/test-critical-coverage.js',
+);
 assert.match(compatibilityNode24, /node-version: '24'/);
 assert.match(
   compatibilityNode24,

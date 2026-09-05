@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Critical per-file coverage gates for poller transitions, admin CAS, and
+  listener reconnect/shutdown paths, with a documented PostgreSQL regression
+  contract. CI and release coverage artifacts now include the tested commit,
+  source/report hashes, and actual installed runtime versions. The Jest harness
+  also loads Nest 12 ESM dependencies for source unit and PostgreSQL tests.
+
 - README local, async publisher, tenant provider, wakeup, and SQL examples now
   compile and run from the installed tarball in strict consumers with and
   without optional `pg`. CI/release gates verify Nest dependency visibility,

@@ -199,7 +199,7 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 |  25A | `OUT-M22B`     | P2       | `BLOCKED`  | M    | `OUT-M22`                                                                            | Prisma CLI dev advisory 후속                                        |
 |  25B | `OUT-M22C`     | P2       | `DONE`     | M    | `OUT-M22`                                                                            | Jest/Nest dev advisory 후속                                         |
 |   26 | `OUT-M25`      | P2       | `DONE`     | M    | `OUT-M06`, `OUT-M11`, `OUT-M23`                                                      | typechecked packed examples                                         |
-|   27 | `OUT-M26`      | P2       | `READY`    | S    | `OUT-M01–02`, `OUT-M08–09`, `OUT-M20A–C`                                             | critical branch coverage gate                                       |
+|   27 | `OUT-M26`      | P2       | `DONE`    | S    | `OUT-M01–02`, `OUT-M08–09`, `OUT-M20A–C`                                             | critical branch coverage gate                                       |
 |   28 | `OUT-M27`      | P3       | `READY`    | M    | 없음                                                                                 | benchmark harness 복구                                              |
 |   29 | `OUT-M28`      | P3       | `DECISION` | S    | 없음                                                                                 | sourcemap/source packaging 계약                                     |
 |   30 | `OUT-M29`      | P3       | `BLOCKED`  | M    | `OUT-M02`, `OUT-M04A–05`, `OUT-M12`, `OUT-M18`                                       | SECURITY/support/operations runbook                                 |
@@ -648,10 +648,14 @@ Node lifecycle 판단은 [Node.js 공식 release schedule](https://github.com/no
 
 ### `OUT-M26` — critical coverage contract
 
-- 선행: `OUT-M01–02`, `OUT-M08–09`, `OUT-M20A–C`.
-- global 80%만 올리는 대신 poller state transitions, admin CAS, listener reconnect/fallback의 critical branch 목록을 정한다.
-- DB/concurrency contract는 coverage 수치로 대체하지 않는다.
-- CI artifact가 exact tested tuple과 commit을 나타내게 한다.
+- 상태: `P2 / DONE`; 선행 `OUT-M01–02`, `OUT-M08–09`, `OUT-M20A–C` 완료.
+- [x] poller state transitions, admin CAS/tenant boundary, listener reconnect/fallback/shutdown의 critical branch와 실제 DB regression 목록을 [coverage contract report](reports/2026-09-05-out-m26-critical-coverage.md)에 고정했다. 미검증 defensive branch도 별도로 기록했다.
+- [x] Jest 파일별 branch floor를 poller 90%, admin 95%, listener 90%로 설정했다. statements/lines는 각 95%, functions는 poller/admin 100%, listener 95%이며 나머지 파일의 global 80% gate를 유지한다.
+- [x] 18개 unit case를 보강했다. baseline 194 tests PASS에서도 새 threshold가 실패하는 첫 RED와 강제 threshold 실패 시 exit 1/성공 metadata 부재를 확인했다.
+- [x] CI primary Nest 12 ESM이 기존 Jest CJS에서 parse 실패하던 문제를 test-only dependency transformer로 해결했다. production build/API/schema/peer/package version 변경은 없다.
+- [x] CI/release coverage artifact에 actual installed tuple, checkout SHA/tree/dirty status, 입력·보고서 SHA-256과 GitHub run identity를 기록한다. source coverage와 실제 PostgreSQL/concurrency gate를 별도로 유지한다.
+
+검증: 프로필 A/B/C/F 및 coverage gate. Node 24.11.1에서 Nest 11.2.3/12.0.1 각각 unit 10 suites/212 tests, PostgreSQL 16 E2E 1 suite/38 tests PASS; branch poller 91.08%, admin 97.59%, listener 91.30%; lint/typecheck/build/compatibility/workflow policy 및 metadata hash 검증 PASS. 원격 Node 22/24 Actions/upload는 review/push 전으로 미실행이다.
 
 ### `OUT-REL-01` — next release gate
 
@@ -823,6 +827,7 @@ Outbox ── durable record / publisher callback ──> Jobs adapter ──> J
 | 2026-09-04 | `OUT-M24`   | `DONE`     | local main `f54a781` working tree                | old handover/spec/plan/SOLID authority banners와 v0.2 status mapping 검토                       | 현재 backlog는 이 문서만 사용                                          |
 | 2026-09-05 | `OUT-M22B` | `BLOCKED` | local `5319d79` → `codex/out-m22bc-dev-audit` working tree | online audit/registry metadata: Prisma 7.10.0 exact pins remain; production 0 | supported Prisma 7 fix 게시 시 재검증; 기존 2026-10-04 예외 만료 유지 |
 | 2026-09-05 | `OUT-M22C` | `DONE` | local `5319d79` → `codex/out-m22bc-dev-audit` working tree | Nest 11.2.3 + compatible Babel/YAML/Express refresh; audit 9 → 4, unit 194/E2E 38 PASS | local 변경 review 및 원격 CI; 남은 advisory는 OUT-M22B |
+| 2026-09-05 | `OUT-M26` | `DONE` | local `16e9fc2` → `codex/out-m26-critical-coverage` working tree | per-file gate, 212 unit/38 E2E on Nest 11/12, metadata tuple/hash and negative controls PASS | 변경 review 후 원격 CI artifact 확인; 다음 READY는 OUT-M27 |
 
 ### `OUT-M01` 종료 인계
 
@@ -1273,4 +1278,20 @@ Unverified paths and reason: remote Node 22/24 Actions were not dispatched; loca
 External PR, run, release evidence: fetch confirmed remote main/v0.2.1 remain 873f95b and npm latest 0.2.1; 30 local-only prerequisite commits were preserved by branching from local main. No shared issue claim, commit/push/PR/release was performed. Disposable compose project outbox-out-m25-20260905 was stopped after validation; exact results and artifact digest are in docs/reports/2026-09-05-out-m25-packed-examples.md.
 Remaining risk: CI/release still need remote execution after review/push. The new gate checks example typing/DI/delivery, not external broker guarantees or historical-schema migration performance.
 Next exact action: review the OUT-M25 changes and run remote Node 22/24 gates after push. OUT-M22B remains blocked on a supported upstream patch; the next READY implementation task is OUT-M26.
+```
+
+
+### `OUT-M26` 종료 인계
+
+```text
+Task: OUT-M26
+State: DONE
+Start ref / end ref: local main@16e9fc2be5e946dfdc7a10ff740f5c0880d37bcd / codex/out-m26-critical-coverage working tree (uncommitted)
+Changed files: Jest config, test-only Nest ESM dependency transformer, three critical unit suites, coverage evidence runner/package command, CI/release coverage artifacts and workflow policy, CHANGELOG, maintenance plan and coverage contract/evidence reports
+Contract / semver decision: critical file branch floors are poller 90%, admin 95%, listener 90%; statements/lines 95% and functions 100%/100%/95%. Other files retain global 80%. Numeric coverage cannot replace PostgreSQL concurrency/state assertions. Nest 12 ESM-to-CJS translation is confined to the Jest dependency harness. No runtime/API/schema/peer/package version change.
+Commands and exact results: clean strict npm ci 645 packages; baseline unit 194 PASS with branches 86.13/83.13/78.26; new gate first RED; final unit 10 suites/212 tests and real PostgreSQL 16 E2E 1 suite/38 tests PASS on both Nest 11.2.3/Schedule 5.0.1 and Nest 12.0.1/Schedule 12.0.1 with Prisma 7.10.0; final critical branches 91.08/97.59/91.30; forced poller 100% threshold exits 1 with no success metadata; installed tuple/report hash/transformer interop+URL+cache checks PASS; lint/build typecheck/build/compatibility/workflow policy (20 immutable refs)/scoped formatting/git diff --check PASS.
+Unverified paths and reason: remote Node 22/24 Actions and actual artifact upload/download were not dispatched; local runtime is Node 24.11.1/npm 11.6.2. Packed matrix is unchanged and retains OUT-M25 evidence. Remaining uncovered defensive paths and shutdown-timeout unit gap are explicitly listed in the report.
+External PR, run, release evidence: fetch confirmed origin/main/v0.2.1 at 873f95b, npm latest 0.2.1. The 31 local-only prerequisite commits were preserved. No shared issue claim, commit/push/PR/release was performed. Dedicated compose project outbox-out-m26-20260905 was used; local coverage metadata distinguishes dirty input from committed SHA and reports actual installed versions rather than matrix labels.
+Remaining risk: coverage floors detect aggregate file regressions but do not prove every branch contract or database race. Critical behavior inventory and mandatory PostgreSQL gates must be reviewed together. Existing OUT-M22B Prisma dev-only exception remains unchanged.
+Next exact action: review the OUT-M26 diff and run remote Node 22/24 CI/release verification after push; inspect coverage metadata against its checkout and installed tuple. Next READY implementation task is OUT-M27.
 ```

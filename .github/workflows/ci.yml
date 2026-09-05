@@ -62,6 +62,9 @@ jobs:
       - name: Compatibility policy
         run: npm run test:compatibility-policy
 
+      - name: Workflow policy
+        run: npm run test:workflow-policy
+
       - name: Production dependency audit
         run: npm run audit:production
 
@@ -196,7 +199,7 @@ jobs:
         if: matrix.node == '24' && matrix.nestjs == '12.0.1' && matrix.prisma == '7.10.0'
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-report
+          name: coverage-${{ github.sha }}-node${{ matrix.node }}-nest${{ matrix.nestjs }}-prisma${{ matrix.prisma }}-${{ github.run_attempt }}
           path: coverage/
           if-no-files-found: error
           retention-days: 14
