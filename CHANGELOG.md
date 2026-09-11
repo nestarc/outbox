@@ -6,12 +6,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.4.0] — Unreleased
+## [0.4.0] — 2026-09-11
 
 ### Migration
 
 This pre-1.0 minor changes accepted configuration and admin cursors. Follow the
-[0.4.0 upgrade steps](README.md#upgrading-to-040). The required database schema
+[0.4.0 upgrade steps](https://github.com/nestarc/outbox/blob/v0.4.0/README.md#upgrading-to-040). The required database schema
 remains 0.3.0; no additional SQL migration is required for a current 0.3.0 schema.
 
 - Keep periodic polling enabled. `polling.enabled: false` now fails Nest module
