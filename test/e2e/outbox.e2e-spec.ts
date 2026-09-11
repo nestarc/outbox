@@ -964,6 +964,42 @@ describe('Outbox E2E', () => {
     expect(sent).toEqual({ status: 'SENT' });
   });
 
+  it.each(['sync', 'async'] as const)(
+    'rejects disabled polling during %s Nest initialization even with wakeup enabled',
+    async (registration) => {
+      const options = {
+        prisma,
+        polling: { enabled: false },
+        wakeup: { enabled: true, connectionString },
+      };
+      const module = await Test.createTestingModule({
+        imports: [
+          registration === 'sync'
+            ? OutboxModule.forRoot(options)
+            : OutboxModule.forRootAsync({ useFactory: () => options }),
+        ],
+      }).compile();
+
+      try {
+        await expect(module.init()).rejects.toMatchObject({
+          name: 'OutboxConfigurationError',
+          code: 'OUTBOX_INVALID_CONFIGURATION',
+          option: 'polling.enabled',
+        });
+      } finally {
+        // Nest close() may rethrow its rejected initialization promise.
+        // Disabled polling never opened a scheduler or notification client.
+        await module.close().catch((error: unknown) => {
+          if (
+            (error as { code?: string }).code !== 'OUTBOX_INVALID_CONFIGURATION'
+          ) {
+            throw error;
+          }
+        });
+      }
+    },
+  );
+
   it('wakes only after the real PostgreSQL listener is ready', async () => {
     const channel = 'outbox_m20_ready';
     await prisma.$executeRaw`
@@ -977,7 +1013,7 @@ describe('Outbox E2E', () => {
     });
     const options = {
       prisma,
-      polling: { enabled: false, batchSize: 1 },
+      polling: { enabled: true, interval: 60_000, batchSize: 1 },
       delivery: { mode: 'publisher' as const },
       hooks: { onDispatchSuccess: reportSuccess },
       wakeup: { enabled: true, channel, connectionString },
@@ -1066,7 +1102,7 @@ describe('Outbox E2E', () => {
     };
     const options = {
       prisma: coordinatedPrisma,
-      polling: { enabled: false, batchSize: 1 },
+      polling: { enabled: true, interval: 60_000, batchSize: 1 },
       delivery: { mode: 'publisher' as const },
       wakeup: {
         enabled: true,
@@ -1188,7 +1224,7 @@ describe('Outbox E2E', () => {
     const publisher = { publish: jest.fn().mockResolvedValue(undefined) };
     const options = {
       prisma,
-      polling: { enabled: false, batchSize: 1 },
+      polling: { enabled: true, interval: 60_000, batchSize: 1 },
       delivery: { mode: 'publisher' as const },
       hooks: { onDispatchSuccess: reportSuccess },
       wakeup: {
@@ -1267,7 +1303,7 @@ describe('Outbox E2E', () => {
     };
     const options = {
       prisma: coordinatedPrisma,
-      polling: { enabled: false, batchSize: 1 },
+      polling: { enabled: true, interval: 60_000, batchSize: 1 },
       wakeup: {
         enabled: true,
         channel: 'outbox_p0_gate',
@@ -2313,6 +2349,53 @@ describe('Outbox E2E', () => {
     );
     expect(observed).toEqual(expectedIds);
     expect(new Set(observed).size).toBe(expectedIds.length);
+  });
+
+  it('paginates PostgreSQL microsecond timestamps without gaps or duplicates', async () => {
+    await prisma.$executeRawUnsafe(`
+      INSERT INTO outbox_events (id, event_type, payload, tenant_id, created_at)
+      VALUES
+        ('00000000-0000-4000-8000-000000000003', 'cursor.precise', '{}'::jsonb, 'cursor-tenant', TIMESTAMPTZ '2026-01-02 03:04:05.123456+00'),
+        ('00000000-0000-4000-8000-000000000001', 'cursor.precise', '{}'::jsonb, 'cursor-tenant', TIMESTAMPTZ '2026-01-02 03:04:05.123456+00'),
+        ('00000000-0000-4000-8000-000000000004', 'cursor.precise', '{}'::jsonb, 'cursor-tenant', TIMESTAMPTZ '2026-01-02 03:04:05.123455+00'),
+        ('00000000-0000-4000-8000-000000000002', 'cursor.precise', '{}'::jsonb, 'cursor-tenant', TIMESTAMPTZ '2026-01-02 03:04:05.123001+00')
+    `);
+    const expectedIds = [
+      '00000000-0000-4000-8000-000000000003',
+      '00000000-0000-4000-8000-000000000001',
+      '00000000-0000-4000-8000-000000000004',
+      '00000000-0000-4000-8000-000000000002',
+    ];
+
+    for (const admin of [
+      new OutboxAdminService({ prisma }),
+      new OutboxTenantAdminService({ prisma }).forTenant('cursor-tenant'),
+    ]) {
+      const observed: string[] = [];
+      let cursor: string | undefined;
+      for (let index = 0; index < expectedIds.length; index++) {
+        const page = await admin.listPage({ limit: 1, cursor });
+        expect(page.records).toHaveLength(1);
+        expect(page.records[0].createdAt).toEqual(
+          new Date('2026-01-02T03:04:05.123Z'),
+        );
+        observed.push(page.records[0].id);
+        if (index === 0) {
+          expect(
+            JSON.parse(Buffer.from(page.nextCursor!, 'base64url').toString())
+              .createdAt,
+          ).toBe('2026-01-02T03:04:05.123456Z');
+        }
+        if (index < expectedIds.length - 1) {
+          expect(page.nextCursor).toEqual(expect.any(String));
+          cursor = page.nextCursor!;
+        } else {
+          expect(page.nextCursor).toBeNull();
+        }
+      }
+      expect(observed).toEqual(expectedIds);
+      expect(new Set(observed).size).toBe(expectedIds.length);
+    }
   });
 
   it('chunks a 10,001-row admin retry without bind-limit or duplicate-count errors', async () => {

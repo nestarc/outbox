@@ -27,12 +27,22 @@ import type {
   OutboxOptionsFactory,
 } from './interfaces/outbox-options.interface';
 import type { OutboxTenantProvider } from './interfaces/outbox-tenancy.interface';
-import { validateOutboxOptions } from './outbox-invariants';
+import {
+  validateOutboxOptions,
+  validateOutboxTenantProviderInstance,
+  validateOutboxTenantProviderRegistration,
+} from './outbox-invariants';
 import { OutboxSchemaGuard } from './outbox.schema';
+import { OutboxConfigurationError } from './errors/outbox-configuration.error';
+
+const OUTBOX_TENANT_PROVIDER_VALIDATION = Symbol(
+  'OUTBOX_TENANT_PROVIDER_VALIDATION',
+);
 
 @Module({})
 export class OutboxModule {
   static forRoot(options: OutboxOptions): DynamicModule {
+    this.validateRegistrationOptions(options);
     const prismaRef = options.prisma;
     const isPrismaClass = typeof prismaRef === 'function';
 
@@ -64,7 +74,7 @@ export class OutboxModule {
       providers: [
         optionsProvider,
         transportProvider,
-        tenantProvider,
+        ...tenantProvider,
         OutboxOperatorService,
         OutboxTenantAdminService,
         OutboxSchemaGuard,
@@ -85,13 +95,17 @@ export class OutboxModule {
   }
 
   static forRootAsync(options: OutboxAsyncOptions): DynamicModule {
+    this.validateRegistrationOptions(options);
     const asyncProviders = this.createAsyncProviders(options);
 
     const transportProvider: Provider = {
       provide: OUTBOX_TRANSPORT,
       useClass: options.transport ?? LocalTransport,
     };
-    const tenantProvider = this.createTenantProvider(options.tenantProvider);
+    const tenantProvider = this.createTenantProvider(
+      options.tenantProvider,
+      'tenantProvider',
+    );
 
     return {
       module: OutboxModule,
@@ -104,7 +118,7 @@ export class OutboxModule {
       providers: [
         ...asyncProviders,
         transportProvider,
-        tenantProvider,
+        ...tenantProvider,
         OutboxOperatorService,
         OutboxTenantAdminService,
         OutboxSchemaGuard,
@@ -126,25 +140,38 @@ export class OutboxModule {
 
   private static createTenantProvider(
     provider?: Type<OutboxTenantProvider> | OutboxTenantProvider,
-  ): Provider {
-    if (!provider) {
-      return {
-        provide: OUTBOX_TENANT_PROVIDER,
-        useValue: null,
-      };
+    option = 'tenancy.provider',
+  ): Provider[] {
+    validateOutboxTenantProviderRegistration(provider, option);
+    if (provider === undefined) {
+      return [
+        {
+          provide: OUTBOX_TENANT_PROVIDER,
+          useValue: null,
+        },
+      ];
     }
 
     if (typeof provider === 'function') {
-      return {
-        provide: OUTBOX_TENANT_PROVIDER,
-        useClass: provider,
-      };
+      return [
+        { provide: OUTBOX_TENANT_PROVIDER, useClass: provider },
+        {
+          provide: OUTBOX_TENANT_PROVIDER_VALIDATION,
+          inject: [OUTBOX_TENANT_PROVIDER],
+          useFactory: (instance: OutboxTenantProvider): boolean => {
+            validateOutboxTenantProviderInstance(instance, option);
+            return true;
+          },
+        },
+      ];
     }
 
-    return {
-      provide: OUTBOX_TENANT_PROVIDER,
-      useValue: provider,
-    };
+    return [
+      {
+        provide: OUTBOX_TENANT_PROVIDER,
+        useValue: provider,
+      },
+    ];
   }
 
   private static createAsyncProviders(options: OutboxAsyncOptions): Provider[] {
@@ -203,10 +230,11 @@ export class OutboxModule {
   ): OutboxOptions {
     const candidate = runtimeOptions as OutboxOptions;
     if (
-      Object.prototype.hasOwnProperty.call(candidate, 'transport') ||
-      Object.prototype.hasOwnProperty.call(candidate, 'isGlobal') ||
-      (candidate.tenancy &&
-        Object.prototype.hasOwnProperty.call(candidate.tenancy, 'provider'))
+      candidate &&
+      (Object.prototype.hasOwnProperty.call(candidate, 'transport') ||
+        Object.prototype.hasOwnProperty.call(candidate, 'isGlobal') ||
+        (candidate.tenancy &&
+          Object.prototype.hasOwnProperty.call(candidate.tenancy, 'provider')))
     ) {
       throw new Error(
         'OutboxModule.forRootAsync requires transport, tenantProvider, and isGlobal to be registered as top-level async options',
@@ -214,5 +242,19 @@ export class OutboxModule {
     }
 
     return validateOutboxOptions(candidate);
+  }
+
+  private static validateRegistrationOptions(
+    options: OutboxOptions | OutboxAsyncOptions,
+  ): void {
+    if (!options || typeof options !== 'object' || Array.isArray(options)) {
+      throw new OutboxConfigurationError('options', 'must be an object');
+    }
+    if (
+      options.isGlobal !== undefined &&
+      typeof options.isGlobal !== 'boolean'
+    ) {
+      throw new OutboxConfigurationError('isGlobal', 'must be a boolean');
+    }
   }
 }

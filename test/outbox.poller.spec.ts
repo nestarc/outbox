@@ -165,6 +165,95 @@ describe('OutboxPoller', () => {
       expect(prisma.$queryRaw).toHaveBeenCalledTimes(2);
       jest.useRealTimers();
     });
+
+    it('drains a startup backlog across batches without receiving notifications', async () => {
+      jest.useFakeTimers();
+      const records = [
+        createRecord({ id: 'first-event' }),
+        createRecord({ id: 'second-event' }),
+      ];
+      const prisma = createMockPrisma();
+      prisma.$queryRaw.mockImplementation(async () => {
+        const record = records.shift();
+        return record ? [record] : [];
+      });
+      const publisher = { publish: jest.fn().mockResolvedValue(undefined) };
+      const poller = createPoller({
+        prisma,
+        transport: publisher,
+        options: {
+          polling: { enabled: true, interval: 100, batchSize: 1 },
+          delivery: { mode: 'publisher' },
+        },
+      });
+
+      await poller.onModuleInit();
+      await jest.advanceTimersByTimeAsync(100);
+      expect(publisher.publish).toHaveBeenCalledTimes(1);
+      expect(records).toHaveLength(1);
+
+      await jest.advanceTimersByTimeAsync(100);
+      expect(publisher.publish).toHaveBeenCalledTimes(2);
+      expect(records).toHaveLength(0);
+      expect(prisma.$executeRaw).toHaveBeenCalledTimes(2);
+      await poller.onApplicationShutdown();
+    });
+
+    it('retries a due event after idle polling cycles without another notification', async () => {
+      jest.useFakeTimers();
+      const row = { ...createRecord({ status: 'PENDING' }) };
+      const prisma = createMockPrisma();
+      // Model the database's persisted eligibility boundary, including idle
+      // cycles between a failed attempt and its due time.
+      prisma.$queryRaw.mockImplementation(async () => {
+        if (
+          row.status !== 'PENDING' ||
+          (row.nextAttemptAt && row.nextAttemptAt.getTime() > Date.now())
+        ) {
+          return [];
+        }
+        row.status = 'PROCESSING';
+        return [{ ...row }];
+      });
+      prisma.$executeRaw.mockImplementation(async (sql, ...values) => {
+        if (sql.join('').includes("SET status = 'PENDING'")) {
+          row.status = 'PENDING';
+          row.retryCount = values[0];
+          row.nextAttemptAt = new Date(Date.now() + values[2] * 1000);
+        } else if (sql.join('').includes("SET status = 'SENT'")) {
+          row.status = 'SENT';
+        }
+        return 1;
+      });
+      const publisher = {
+        publish: jest
+          .fn()
+          .mockRejectedValueOnce(new Error('temporary broker failure'))
+          .mockResolvedValue(undefined),
+      };
+      const poller = createPoller({
+        prisma,
+        transport: publisher,
+        options: {
+          polling: { enabled: true, interval: 100, batchSize: 1 },
+          retry: { initialDelay: 250 },
+          delivery: { mode: 'publisher' },
+        },
+      });
+
+      await poller.onModuleInit();
+      await jest.advanceTimersByTimeAsync(100);
+      expect(row.status).toBe('PENDING');
+      expect(row.retryCount).toBe(1);
+      expect(publisher.publish).toHaveBeenCalledTimes(1);
+
+      await jest.advanceTimersByTimeAsync(200);
+      expect(publisher.publish).toHaveBeenCalledTimes(1);
+      await jest.advanceTimersByTimeAsync(100);
+      expect(publisher.publish).toHaveBeenCalledTimes(2);
+      expect(row.status).toBe('SENT');
+      await poller.onApplicationShutdown();
+    });
   });
 
   describe('poll', () => {

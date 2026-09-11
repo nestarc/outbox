@@ -12,10 +12,21 @@ import type { OutboxOptions } from './interfaces/outbox-options.interface';
 import type { OutboxRecord } from './interfaces/outbox-record.interface';
 import type { OutboxPublisher } from './interfaces/outbox-publisher.interface';
 import type { OutboxTransport } from './interfaces/outbox-transport.interface';
+import type { OutboxHooks } from './interfaces/outbox-hooks.interface';
 import { LocalTransport } from './transports/local.transport';
 
 const POSTGRES_INTEGER_MAX = 2_147_483_647;
 const MAX_BATCH_SIZE = 10_000;
+const MAX_WAKEUP_CHANNEL_BYTES = 63;
+const HOOK_NAMES: readonly (keyof OutboxHooks)[] = [
+  'onEmit',
+  'onPollStart',
+  'onDispatchStart',
+  'onDispatchSuccess',
+  'onDispatchFailure',
+  'onRetryScheduled',
+  'onDeadLetter',
+];
 const STATUSES = new Set<OutboxRecord['status']>([
   'PENDING',
   'PROCESSING',
@@ -28,7 +39,7 @@ export interface ClaimedOutboxRecord extends OutboxRecord {
 }
 
 export function validateOutboxOptions(options: OutboxOptions): OutboxOptions {
-  if (!options || typeof options !== 'object') {
+  if (!isObject(options)) {
     throw new OutboxConfigurationError('options', 'must be an object');
   }
 
@@ -38,6 +49,17 @@ export function validateOutboxOptions(options: OutboxOptions): OutboxOptions {
   assertOptionalObject('delivery', options.delivery);
   assertOptionalObject('wakeup', options.wakeup);
   assertOptionalObject('lease', options.lease);
+  assertOptionalObject('tenancy', options.tenancy);
+  assertOptionalObject('hooks', options.hooks);
+  assertEnum('tenancy.policy', options.tenancy?.policy, [
+    'optional',
+    'required',
+    'require-match',
+  ] as const);
+  validateOutboxTenantProviderRegistration(options.tenancy?.provider);
+  for (const name of HOOK_NAMES) {
+    assertOptionalFunction(`hooks.${name}`, options.hooks?.[name]);
+  }
   assertBoolean('isGlobal', options.isGlobal);
   assertBoolean('polling.enabled', options.polling?.enabled);
   assertSafeInteger(
@@ -97,6 +119,12 @@ export function validateOutboxOptions(options: OutboxOptions): OutboxOptions {
     'publisher',
   ] as const);
   assertBoolean('wakeup.enabled', options.wakeup?.enabled);
+  assertWakeupChannel(options.wakeup?.channel);
+  assertOptionalString(
+    'wakeup.connectionString',
+    options.wakeup?.connectionString,
+  );
+  assertOptionalFunction('wakeup.clientFactory', options.wakeup?.clientFactory);
   assertSafeInteger(
     'wakeup.reconnectDelay',
     options.wakeup?.reconnectDelay,
@@ -153,6 +181,38 @@ export function validateOutboxOptions(options: OutboxOptions): OutboxOptions {
   }
 
   return options;
+}
+
+export function validateOutboxTenantProviderRegistration(
+  provider: unknown,
+  option = 'tenancy.provider',
+): void {
+  if (provider === undefined) return;
+  if (typeof provider === 'function') {
+    try {
+      // Check constructability without running the user's constructor or
+      // assuming methods are on the prototype (class fields are valid too).
+      Reflect.construct(Object, [], provider);
+      return;
+    } catch {
+      throw new OutboxConfigurationError(
+        option,
+        'must be a constructable provider class or a provider instance',
+      );
+    }
+  }
+  validateOutboxTenantProviderInstance(provider, option);
+}
+
+export function validateOutboxTenantProviderInstance(
+  provider: unknown,
+  option = 'tenancy.provider',
+): void {
+  if (!isObject(provider)) {
+    throw new OutboxConfigurationError(option, 'must be a provider object');
+  }
+  assertOptionalFunction(`${option}.getTenantId`, provider.getTenantId);
+  assertOptionalFunction(`${option}.runWithTenant`, provider.runWithTenant);
 }
 
 export function validateDeliveryTransport(
@@ -323,6 +383,34 @@ function assertBoolean(option: string, value: unknown): void {
 function assertOptionalObject(option: string, value: unknown): void {
   if (value !== undefined && !isObject(value)) {
     throw new OutboxConfigurationError(option, 'must be an object');
+  }
+}
+
+function assertOptionalFunction(option: string, value: unknown): void {
+  if (value !== undefined && typeof value !== 'function') {
+    throw new OutboxConfigurationError(option, 'must be a function');
+  }
+}
+
+function assertOptionalString(option: string, value: unknown): void {
+  if (value !== undefined && typeof value !== 'string') {
+    throw new OutboxConfigurationError(option, 'must be a string');
+  }
+}
+
+function assertWakeupChannel(value: unknown): void {
+  if (value === undefined) return;
+  assertOptionalString('wakeup.channel', value);
+  const channel = value as string;
+  if (
+    channel.length === 0 ||
+    channel.includes('\0') ||
+    Buffer.byteLength(channel, 'utf8') > MAX_WAKEUP_CHANNEL_BYTES
+  ) {
+    throw new OutboxConfigurationError(
+      'wakeup.channel',
+      `must be non-empty, contain no NUL bytes, and use at most ${MAX_WAKEUP_CHANNEL_BYTES} UTF-8 bytes`,
+    );
   }
 }
 

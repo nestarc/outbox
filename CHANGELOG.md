@@ -6,6 +6,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] — Unreleased
+
+### Migration
+
+This pre-1.0 minor changes accepted configuration and admin cursors. Follow the
+[0.4.0 upgrade steps](README.md#upgrading-to-040). The required database schema
+remains 0.3.0; no additional SQL migration is required for a current 0.3.0 schema.
+
+- Keep periodic polling enabled. `polling.enabled: false` now fails Nest module
+  initialization with `OutboxConfigurationError` (`OUTBOX_INVALID_CONFIGURATION`),
+  even when LISTEN/NOTIFY is available. Notifications alone cannot reliably
+  deliver existing backlog, due retries, or expired claims.
+- Restart existing `listPage()` traversals from the first page. New version 2
+  cursors preserve PostgreSQL microseconds; version 1 cursors are rejected with
+  `OutboxCursorError` (`OUTBOX_INVALID_CURSOR`) because their lost precision
+  cannot be recovered. Public record date fields remain JavaScript `Date` values.
+
+### Fixed
+
+- Preserve the exact database timestamp in admin cursor boundaries so records
+  with identical or sub-millisecond creation times are not skipped.
+- Validate tenant policies and provider shapes, observability callbacks, and
+  notification configuration during module setup instead of failing on the
+  first event. Configuration validation does not assert external connection
+  availability or callback behavior.
+- Clarify PostgreSQL support, Prisma 7 adapter dependencies, tenant null/global
+  rules, and the application's shutdown-hook setup and 30-second drain bound.
+- Preserve event identity and routing/tracing metadata in the publisher example.
+
+### Documentation
+
+- Put SQL setup before module initialization, add a contents list and a separate
+  usage reference, and remove the duplicated full SQL listing from the README.
+- Ship a runnable quick-start application, its run instructions, the usage
+  reference, and a compact `llms.txt` documentation map in the package. Packed
+  example checks exercise the complete installed example and verify local
+  documentation links.
+- Document 0.4.0 behavior and retain a versioned 0.3.0 reference; update package
+  discovery metadata and link directly to the Outbox documentation.
+
 ## [0.3.0] — 2026-09-05
 
 ### Migration
@@ -217,15 +257,14 @@ and remove unsupported deep imports. Delivery remains at-least-once.
   Legacy `PROCESSING` rows with a null lease retain the configured duration as
   their recovery threshold. Drain 0.2.x pollers before starting the new runtime
   because older pollers neither heartbeat active claims nor persist due times.
-- Because the required schema migration and readonly public type tightening
-  affect consumers, and the admin single-record mutation result changed from a
-  boolean to a discriminated union, this change is targeted at the next
-  pre-1.0 minor release rather than a patch release.
-- The additive cursor API/errors and stricter producer envelope validation are
-  also targeted at the next pre-1.0 minor release. Existing Date filters are
+- The required schema migration, readonly public type tightening, and change
+  from boolean admin mutation results to a discriminated union shipped in
+  this pre-1.0 minor release.
+- The additive cursor API/errors and stricter producer envelope validation
+  also shipped in 0.3.0. Existing Date filters are
   source-compatible but remain range filters rather than pagination cursors.
-- Raising the Node engine floor and removing Node 20 are also intentionally
-  targeted at that next pre-1.0 minor release. Node 20 consumers must move to
+- This release raised the Node engine floor and removed Node 20 support.
+  Node 20 consumers must move to
   Node 22 or remain on the 0.2.x release line.
 
 ## [0.2.1] — 2026-08-30

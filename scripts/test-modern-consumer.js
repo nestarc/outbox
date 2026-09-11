@@ -62,7 +62,10 @@ function strictInstallEnvironment(temporaryDirectory) {
 function stageCandidatePackage(workspaceDirectory, temporaryDirectory) {
   const candidateDirectory = path.join(temporaryDirectory, 'candidate-package');
   fs.mkdirSync(candidateDirectory, { recursive: true });
-  for (const entry of ['dist', 'src', 'README.md', 'LICENSE']) {
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(workspaceDirectory, 'package.json'), 'utf8'),
+  );
+  for (const entry of manifest.files) {
     fs.cpSync(
       path.join(workspaceDirectory, entry),
       path.join(candidateDirectory, entry),
@@ -70,9 +73,6 @@ function stageCandidatePackage(workspaceDirectory, temporaryDirectory) {
     );
   }
 
-  const manifest = JSON.parse(
-    fs.readFileSync(path.join(workspaceDirectory, 'package.json'), 'utf8'),
-  );
   manifest.engines.node = '>=22.0.0';
   manifest.peerDependencies['@nestjs/common'] = '^10.0.0 || ^11.0.0 || ^12.0.0';
   manifest.peerDependencies['@nestjs/core'] = '^10.0.0 || ^11.0.0 || ^12.0.0';

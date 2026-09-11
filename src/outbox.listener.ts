@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { createRequire } from 'node:module';
 import { OUTBOX_OPTIONS } from './outbox.constants';
-import { OutboxWakeupUnavailableError } from './errors/outbox-wakeup-unavailable.error';
+import { OutboxConfigurationError } from './errors/outbox-configuration.error';
 import type { OutboxOptions } from './interfaces/outbox-options.interface';
 import type { OutboxNotificationClient } from './interfaces/outbox-wakeup.interface';
 import { OutboxPoller } from './outbox.poller';
@@ -54,13 +54,14 @@ export class OutboxListener implements OnModuleInit, OnApplicationShutdown {
   ) {}
 
   async onModuleInit(): Promise<void> {
+    if (this.options.polling?.enabled === false) {
+      throw new OutboxConfigurationError(
+        'polling.enabled',
+        'must be true; periodic polling is required for retries, backlog delivery, and lease recovery',
+      );
+    }
     if (this.schemaGuard) await this.schemaGuard.assertCompatible();
     if (!this.options.wakeup?.enabled) {
-      if (this.options.polling?.enabled === false) {
-        throw new OutboxWakeupUnavailableError(
-          new Error('wakeup.enabled is false'),
-        );
-      }
       return;
     }
 
@@ -69,10 +70,6 @@ export class OutboxListener implements OnModuleInit, OnApplicationShutdown {
       this.reconnectAttempt = 0;
     } catch (error: unknown) {
       const err = this.toError(error);
-      if (this.options.polling?.enabled === false) {
-        throw new OutboxWakeupUnavailableError(err);
-      }
-
       this.logger.warn(
         `Outbox LISTEN/NOTIFY initial connection unavailable; continuing with polling fallback: ${err.message}`,
       );

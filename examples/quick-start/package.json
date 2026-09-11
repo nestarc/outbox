@@ -1,0 +1,29 @@
+{
+  "name": "outbox-quick-start",
+  "version": "1.0.0",
+  "private": true,
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "prisma:generate": "prisma generate",
+    "db:prepare": "node scripts/prepare-database.js",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@nestarc/outbox": "0.4.0",
+    "@nestjs/common": "11.2.3",
+    "@nestjs/core": "11.2.3",
+    "@nestjs/schedule": "5.0.1",
+    "@prisma/client": "5.22.0",
+    "reflect-metadata": "0.2.2",
+    "rxjs": "7.8.2"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.1",
+    "prisma": "5.22.0",
+    "typescript": "5.9.3"
+  }
+}

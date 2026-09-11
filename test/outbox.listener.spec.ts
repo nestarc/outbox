@@ -1,8 +1,9 @@
 import { OutboxListener } from '../src/outbox.listener';
-import { OutboxWakeupUnavailableError } from '../src';
+import { OutboxConfigurationError } from '../src';
 import type { OutboxNotificationClient } from '../src/interfaces/outbox-wakeup.interface';
 import type { OutboxOptions } from '../src/interfaces/outbox-options.interface';
 import { OutboxPoller } from '../src/outbox.poller';
+import { OutboxSchemaGuard } from '../src/outbox.schema';
 
 function createClient(supportsListenerRemoval = false): {
   client: jest.Mocked<OutboxNotificationClient>;
@@ -40,6 +41,59 @@ function createPoller(): jest.Mocked<Pick<OutboxPoller, 'requestPoll'>> {
 }
 
 describe('OutboxListener', () => {
+  it.each([false, true])(
+    'waits for schema validation before opening a client (shutdown while waiting=%s)',
+    async (shutdownWhileWaiting) => {
+      const { client } = createClient();
+      const clientFactory = jest.fn(() => client);
+      const options: OutboxOptions = {
+        prisma: {},
+        wakeup: { enabled: true, clientFactory },
+      };
+      let finishSchemaValidation!: () => void;
+      const schemaValidation = new Promise<void>((resolve) => {
+        finishSchemaValidation = resolve;
+      });
+      const schemaGuard = new OutboxSchemaGuard(options);
+      const assertCompatible = jest
+        .spyOn(schemaGuard, 'assertCompatible')
+        .mockReturnValue(schemaValidation);
+      const poller = createPoller();
+      const listener = new OutboxListener(options, poller, schemaGuard);
+
+      const initialization = listener.onModuleInit();
+      expect(assertCompatible).toHaveBeenCalledTimes(1);
+      expect(clientFactory).not.toHaveBeenCalled();
+      if (shutdownWhileWaiting) await listener.onApplicationShutdown();
+
+      finishSchemaValidation();
+      await initialization;
+
+      expect(clientFactory).toHaveBeenCalledTimes(shutdownWhileWaiting ? 0 : 1);
+      expect(client.query).toHaveBeenCalledTimes(shutdownWhileWaiting ? 0 : 1);
+      expect(poller.requestPoll).not.toHaveBeenCalled();
+      await listener.onApplicationShutdown();
+    },
+  );
+
+  it('propagates schema validation failures without opening a notification client', async () => {
+    const { client } = createClient();
+    const clientFactory = jest.fn(() => client);
+    const options: OutboxOptions = {
+      prisma: {},
+      wakeup: { enabled: true, clientFactory },
+    };
+    const schemaGuard = new OutboxSchemaGuard(options);
+    const schemaError = new Error('outbox schema is incompatible');
+    jest.spyOn(schemaGuard, 'assertCompatible').mockRejectedValue(schemaError);
+    const listener = new OutboxListener(options, createPoller(), schemaGuard);
+
+    await expect(listener.onModuleInit()).rejects.toBe(schemaError);
+    expect(clientFactory).not.toHaveBeenCalled();
+    expect(client.connect).not.toHaveBeenCalled();
+    await listener.onApplicationShutdown();
+  });
+
   it('coalesces overlapping initialization and closes the previous client before replacement', async () => {
     const first = createClient();
     const second = createClient();
@@ -246,7 +300,7 @@ describe('OutboxListener', () => {
     };
     const options: OutboxOptions = {
       prisma,
-      polling: { enabled: false },
+      polling: { enabled: true },
       wakeup: {
         enabled: true,
         channel: 'outbox_custom',
@@ -364,22 +418,29 @@ describe('OutboxListener', () => {
     expect(client.connect).not.toHaveBeenCalled();
   });
 
-  it('should fail fast when both polling and wakeup are disabled', async () => {
-    const listener = new OutboxListener(
-      {
-        prisma: {},
-        polling: { enabled: false },
-        wakeup: { enabled: false },
-      },
-      createPoller(),
-    );
+  it.each([false, true])(
+    'rejects disabled polling before opening a notification client (wakeup=%s)',
+    async (wakeupEnabled) => {
+      const { client } = createClient();
+      const clientFactory = jest.fn(() => client);
+      const listener = new OutboxListener(
+        {
+          prisma: {},
+          polling: { enabled: false },
+          wakeup: { enabled: wakeupEnabled, clientFactory },
+        },
+        createPoller(),
+      );
 
-    await expect(listener.onModuleInit()).rejects.toMatchObject({
-      name: 'OutboxWakeupUnavailableError',
-      code: 'OUTBOX_WAKEUP_UNAVAILABLE',
-      cause: expect.objectContaining({ message: 'wakeup.enabled is false' }),
-    } satisfies Partial<OutboxWakeupUnavailableError>);
-  });
+      await expect(listener.onModuleInit()).rejects.toMatchObject({
+        name: 'OutboxConfigurationError',
+        code: 'OUTBOX_INVALID_CONFIGURATION',
+        option: 'polling.enabled',
+      } satisfies Partial<OutboxConfigurationError>);
+      expect(clientFactory).not.toHaveBeenCalled();
+      expect(client.connect).not.toHaveBeenCalled();
+    },
+  );
 
   it('should fall back to polling when pg is unavailable and no client factory exists', async () => {
     const poller = createPoller();
@@ -438,7 +499,7 @@ describe('OutboxListener', () => {
     await listener.onApplicationShutdown();
   });
 
-  it('should fail fast with a stable typed error when polling is disabled and wakeup is unavailable', async () => {
+  it('rejects disabled polling without starting reconnect work when wakeup is unavailable', async () => {
     jest.useFakeTimers();
     const { client } = createClient();
     client.connect.mockRejectedValueOnce(new Error('database unavailable'));
@@ -456,11 +517,12 @@ describe('OutboxListener', () => {
     );
 
     await expect(listener.onModuleInit()).rejects.toMatchObject({
-      name: 'OutboxWakeupUnavailableError',
-      code: 'OUTBOX_WAKEUP_UNAVAILABLE',
-      cause: expect.objectContaining({ message: 'database unavailable' }),
-    } satisfies Partial<OutboxWakeupUnavailableError>);
-    expect(client.end).toHaveBeenCalledTimes(1);
+      name: 'OutboxConfigurationError',
+      code: 'OUTBOX_INVALID_CONFIGURATION',
+      option: 'polling.enabled',
+    } satisfies Partial<OutboxConfigurationError>);
+    expect(client.connect).not.toHaveBeenCalled();
+    expect(client.end).not.toHaveBeenCalled();
     expect(jest.getTimerCount()).toBe(0);
   });
 
