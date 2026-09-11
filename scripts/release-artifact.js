@@ -8,7 +8,19 @@ const path = require('node:path');
 
 const MAX_PACKED_BYTES = 512 * 1024;
 const MAX_UNPACKED_BYTES = 2 * 1024 * 1024;
-const REQUIRED_ROOT_FILES = ['LICENSE', 'README.md', 'package.json'];
+const REQUIRED_ROOT_FILES = [
+  'LICENSE',
+  'README.md',
+  'package.json',
+  'llms.txt',
+];
+const REQUIRED_DOCUMENTATION_FILES = [
+  'docs/usage.md',
+  'examples/quick-start/README.md',
+  'examples/quick-start/package.json',
+  'examples/quick-start/tsconfig.json',
+  'examples/quick-start/compose.yml',
+];
 const REQUIRED_SQL_FILES = [
   'src/sql/create-outbox-table.sql',
   'src/sql/upgrade-0.1-to-0.2.sql',
@@ -42,18 +54,61 @@ function assertAllowlisted(files) {
   for (const file of files) {
     const allowed =
       REQUIRED_ROOT_FILES.includes(file) ||
+      REQUIRED_DOCUMENTATION_FILES.includes(file) ||
       file.startsWith('dist/') ||
-      file.startsWith('src/sql/');
+      file.startsWith('src/sql/') ||
+      /^examples\/quick-start\/(?:src|prisma|scripts)\/[\w./-]+\.(?:ts|prisma|sql|mjs|js)$/.test(
+        file,
+      );
     assert.ok(
       allowed,
       `release tarball contains non-allowlisted file: ${file}`,
     );
   }
-  for (const required of [...REQUIRED_ROOT_FILES, ...REQUIRED_SQL_FILES]) {
+  for (const required of [
+    ...REQUIRED_ROOT_FILES,
+    ...REQUIRED_DOCUMENTATION_FILES,
+    ...REQUIRED_SQL_FILES,
+  ]) {
     assert.ok(
       files.includes(required),
       `release tarball is missing ${required}`,
     );
+  }
+}
+
+function assertDocumentationLinks(packageDirectory, files) {
+  const documents = files.filter(
+    (file) => file.endsWith('.md') || file === 'llms.txt',
+  );
+  for (const document of documents) {
+    const markdown = fs
+      .readFileSync(path.join(packageDirectory, document), 'utf8')
+      .replace(/^```[^\n]*\n[\s\S]*?^```\s*$/gm, '');
+    const links = markdown.matchAll(
+      /!?\[[^\]]*\]\(<?([^\s)>]+)>?(?:\s+"[^"]*")?\)/g,
+    );
+    for (const [, href] of links) {
+      if (/^(?:[a-z][a-z\d+.-]*:|\/\/|#)/i.test(href)) continue;
+      const pathname = decodeURIComponent(href.split(/[?#]/)[0]);
+      if (!pathname) continue;
+      const target = path.resolve(
+        packageDirectory,
+        path.dirname(document),
+        pathname,
+      );
+      const relative = path.relative(packageDirectory, target);
+      assert.ok(
+        relative !== '..' &&
+          !relative.startsWith(`..${path.sep}`) &&
+          !path.isAbsolute(relative),
+        `${document} documentation link escapes installed package: ${href}`,
+      );
+      assert.ok(
+        fs.existsSync(target),
+        `${document} documentation link is missing from installed package: ${href}`,
+      );
+    }
   }
 }
 
@@ -93,6 +148,7 @@ function inspectArchive(tarballPath) {
       0,
     );
     assertAllowlisted(files);
+    assertDocumentationLinks(packageDirectory, files);
 
     const manifest = JSON.parse(
       fs.readFileSync(path.join(packageDirectory, 'package.json'), 'utf8'),

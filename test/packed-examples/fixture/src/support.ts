@@ -24,9 +24,17 @@ export interface CreateOrderDto {
 
 @Injectable()
 export class EmailService {
-  readonly confirmations: string[] = [];
-  async sendOrderConfirmation(orderId: string): Promise<void> {
-    this.confirmations.push(orderId);
+  // This double verifies forwarding. A real provider owns durable deduplication.
+  readonly confirmations: Array<{ orderId: string; idempotencyKey: string }> =
+    [];
+  async sendOrderConfirmation(
+    orderId: string,
+    options: { idempotencyKey: string },
+  ): Promise<void> {
+    this.confirmations.push({
+      orderId,
+      idempotencyKey: options.idempotencyKey,
+    });
   }
 }
 

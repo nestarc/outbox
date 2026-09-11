@@ -14,6 +14,7 @@ function createDbRow(overrides?: Record<string, unknown>) {
     payload: { orderId: 'order-1' },
     status: 'FAILED',
     created_at: now,
+    cursor_created_at: '2026-01-02T03:04:05.000000Z',
     updated_at: now,
     processed_at: null,
     next_attempt_at: now,
@@ -103,10 +104,18 @@ describe('OutboxAdminService', () => {
     ' ',
     'e30=',
     Buffer.from('null').toString('base64url'),
-    ...['invalid', '2026-01-01'].map((createdAt) =>
+    ...[
+      'invalid',
+      '2026-01-01',
+      '2026-01-02T03:04:05.123Z',
+      '2026-02-30T03:04:05.123456Z',
+      '2026-13-02T03:04:05.123456Z',
+      '2026-01-02T03:04:05.123456+00:00',
+      '2026-01-02T03:04:05.1234567Z',
+    ].map((createdAt) =>
       Buffer.from(
         JSON.stringify({
-          v: 1,
+          v: 2,
           order: 'created_at_desc_id_desc',
           id: '00000000-0000-4000-8000-000000000001',
           createdAt,
@@ -251,6 +260,8 @@ describe('OutboxAdminService', () => {
     expect(first.nextCursor).toEqual(expect.any(String));
     const [firstSql, ...firstValues] = prisma.$queryRawUnsafe.mock.calls[0];
     expect(firstSql).toContain('ORDER BY created_at DESC, id DESC');
+    expect(firstSql).toContain("created_at AT TIME ZONE 'UTC'");
+    expect(firstSql).toContain('AS cursor_created_at');
     expect(firstValues).toEqual([2]);
 
     const second = await service.listPage({
@@ -260,8 +271,63 @@ describe('OutboxAdminService', () => {
     expect(second.records).toHaveLength(1);
     const [secondSql, ...secondValues] = prisma.$queryRawUnsafe.mock.calls[1];
     expect(secondSql).toContain('(created_at, id) <');
-    expect(secondValues).toEqual([now, firstId, 2]);
+    expect(secondValues).toEqual(['2026-01-02T03:04:05.000000Z', firstId, 2]);
   });
+
+  it('preserves database microseconds in the cursor while returning Date records', async () => {
+    const { service, prisma } = createService();
+    const firstId = '00000000-0000-4000-8000-000000000003';
+    const secondId = '00000000-0000-4000-8000-000000000002';
+    const createdAt = new Date('2026-01-02T03:04:05.123Z');
+    const preciseCreatedAt = '2026-01-02T03:04:05.123456Z';
+    prisma.$queryRawUnsafe
+      .mockResolvedValueOnce([
+        createDbRow({
+          id: firstId,
+          created_at: createdAt,
+          cursor_created_at: preciseCreatedAt,
+        }),
+        createDbRow({ id: secondId }),
+      ])
+      .mockResolvedValueOnce([createDbRow({ id: secondId })]);
+
+    const first = await service.listPage({ limit: 1 });
+    expect(first.records[0].createdAt).toEqual(createdAt);
+    expect(first.records[0]).not.toHaveProperty('cursor_created_at');
+    expect(
+      JSON.parse(Buffer.from(first.nextCursor!, 'base64url').toString()),
+    ).toEqual({
+      v: 2,
+      createdAt: preciseCreatedAt,
+      id: firstId,
+      order: 'created_at_desc_id_desc',
+    });
+
+    await service.listPage({ limit: 1, cursor: first.nextCursor! });
+    const [sql, ...values] = prisma.$queryRawUnsafe.mock.calls[1];
+    expect(sql).toContain('(created_at, id) < ($1::timestamptz, $2::uuid)');
+    expect(values).toEqual([preciseCreatedAt, firstId, 2]);
+  });
+
+  it.each([1, 3])(
+    'rejects unsupported cursor version %i before querying',
+    async (v) => {
+      const { service, prisma } = createService();
+      const cursor = Buffer.from(
+        JSON.stringify({
+          v,
+          order: 'created_at_desc_id_desc',
+          id: '00000000-0000-4000-8000-000000000001',
+          createdAt:
+            v === 1 ? now.toISOString() : '2026-01-02T03:04:05.000000Z',
+        }),
+      ).toString('base64url');
+      await expect(service.listPage({ cursor })).rejects.toMatchObject({
+        code: 'OUTBOX_INVALID_CURSOR',
+      });
+      expect(prisma.$queryRawUnsafe).not.toHaveBeenCalled();
+    },
+  );
 
   it('should reject malformed and unsupported admin cursors', async () => {
     const { service, prisma } = createService();

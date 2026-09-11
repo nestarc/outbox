@@ -10,8 +10,9 @@ import {
 import { Test, type TestingModule } from '@nestjs/testing';
 import {
   OnOutboxEvent,
+  OutboxConfigurationError,
   OutboxEmitter,
-  OutboxWakeupUnavailableError,
+  OutboxModule,
   OUTBOX_OPTIONS,
   type OutboxOptions,
   type OutboxHandlerContext,
@@ -117,7 +118,9 @@ async function main(): Promise<void> {
       });
       const id = await eventId(prisma, order.id);
       await waitForSent(prisma, id);
-      assert.deepEqual(local.get(EmailService).confirmations, [order.id]);
+      assert.deepEqual(local.get(EmailService).confirmations, [
+        { orderId: order.id, idempotencyKey: id },
+      ]);
       const [row] = await prisma.$queryRaw<
         Array<{ tenant_id: string; aggregate_id: string; headers: unknown }>
       >`
@@ -159,8 +162,17 @@ async function main(): Promise<void> {
           publisher
             .get(OutboxEmitter)
             .emit(tx, new OrderCreatedEvent('published-order', 7), {
+              aggregateType: 'Order',
+              aggregateId: 'published-order',
               partitionKey: 'order-key',
-              headers: { source: 'example' },
+              correlationId: 'request-1',
+              causationId: 'command-1',
+              idempotencyKey: 'operation-1',
+              occurredAt: new Date('2026-01-02T03:04:05.000Z'),
+              headers: {
+                source: 'example',
+                'outbox-event-id': 'caller-supplied-value',
+              },
             }),
         ),
       );
@@ -181,11 +193,94 @@ async function main(): Promise<void> {
               {
                 key: 'order-key',
                 value: { orderId: 'published-order', total: 7 },
-                headers: { source: 'example' },
+                headers: {
+                  source: 'example',
+                  'outbox-event-id': id,
+                  'outbox-event-type': 'order.created',
+                  'outbox-occurred-at': '2026-01-02T03:04:05.000Z',
+                  'outbox-tenant-id': 'tenant-publisher',
+                  'outbox-aggregate-type': 'Order',
+                  'outbox-aggregate-id': 'published-order',
+                  'outbox-partition-key': 'order-key',
+                  'outbox-correlation-id': 'request-1',
+                  'outbox-causation-id': 'command-1',
+                  'outbox-idempotency-key': 'operation-1',
+                },
               },
             ],
           },
         ],
+      );
+      assert.equal(tenant.storage.getStore(), undefined);
+
+      // Canonical null metadata must not leave a caller's reserved headers in
+      // the broker envelope, even when their casing differs or the key is new.
+      await tenant.storage.run('ambient-tenant', () =>
+        prisma.$transaction((tx) =>
+          publisher
+            .get(OutboxEmitter)
+            .emit(tx, new OrderCreatedEvent('global-published-order', 8), {
+              tenantScope: 'global',
+              aggregateType: null,
+              aggregateId: null,
+              partitionKey: null,
+              correlationId: null,
+              causationId: null,
+              idempotencyKey: null,
+              occurredAt: new Date('2026-01-02T03:04:06.000Z'),
+              headers: {
+                source: 'global-example',
+                'X-Request-Tag': 'preserved',
+                'outbox-tenant-id': 'spoofed-tenant',
+                'outbox-aggregate-type': 'Spoofed',
+                'outbox-aggregate-id': 'spoofed-aggregate',
+                'outbox-partition-key': 'spoofed-partition',
+                'outbox-correlation-id': 'spoofed-correlation',
+                'outbox-causation-id': 'spoofed-causation',
+                'outbox-idempotency-key': 'spoofed-idempotency',
+                'OuTbOx-TeNaNt-Id': 'spoofed-case-tenant',
+                'OUTBOX-EVENT-ID': 'spoofed-case-event',
+                'OUTBOX-CORRELATION-ID': 'spoofed-case-correlation',
+                'outbox-extra': 'spoofed-reserved-extension',
+              },
+            }),
+        ),
+      );
+      const globalId = await eventId(prisma, 'global-published-order');
+      await waitForSent(prisma, globalId);
+      const [globalRow] = await prisma.$queryRaw<
+        Array<{ tenant_id: string | null }>
+      >`SELECT tenant_id FROM outbox_events WHERE id = ${globalId}::uuid`;
+      assert.equal(globalRow.tenant_id, null);
+      assert.equal(publisher.get(KafkaProducer).sent.length, 2);
+      const globalMessage = publisher.get(KafkaProducer).sent[1];
+      assert.deepEqual(
+        {
+          ...globalMessage,
+          messages: globalMessage.messages.map((message) => ({
+            ...message,
+            value: JSON.parse(message.value) as unknown,
+          })),
+        },
+        {
+          topic: 'order.created',
+          messages: [
+            {
+              key: globalId,
+              value: {
+                orderId: 'global-published-order',
+                total: 8,
+              },
+              headers: {
+                source: 'global-example',
+                'X-Request-Tag': 'preserved',
+                'outbox-event-id': globalId,
+                'outbox-event-type': 'order.created',
+                'outbox-occurred-at': '2026-01-02T03:04:06.000Z',
+              },
+            },
+          ],
+        },
       );
       assert.equal(tenant.storage.getStore(), undefined);
     });
@@ -230,6 +325,30 @@ async function main(): Promise<void> {
       '[packed-examples] require-match/tenant context restoration/rejection before insert PASS',
     );
 
+    const disabledPolling = await Test.createTestingModule({
+      imports: [
+        PrismaModule,
+        OutboxModule.forRoot({
+          prisma: PrismaService,
+          polling: { enabled: false },
+          wakeup: { enabled: withPg },
+        }),
+      ],
+    }).compile();
+    try {
+      await assert.rejects(disabledPolling.init(), OutboxConfigurationError);
+    } finally {
+      try {
+        // Nest close() awaits the rejected initialization promise first. No
+        // polling timer or notification client starts for this configuration.
+        await disabledPolling.close().catch((error: unknown) => {
+          if (!(error instanceof OutboxConfigurationError)) throw error;
+        });
+      } finally {
+        await disabledPolling.get(PrismaService).$disconnect();
+      }
+    }
+
     const optionsProvider = wakeupRegistration.providers?.find(
       (provider): provider is FactoryProvider =>
         typeof provider === 'object' &&
@@ -249,13 +368,16 @@ async function main(): Promise<void> {
           const options = optionsProvider.useFactory(...args) as OutboxOptions;
           return {
             ...options,
-            polling: { ...options.polling, enabled: false },
+            polling: {
+              ...options.polling,
+              interval: withPg ? 60_000 : 25,
+            },
           };
         },
       })
       .compile();
-    // Disable polling before the poller constructor reads its options. Keep
-    // the README's default pg loader and connection/channel configuration.
+    // The pg lane must deliver before its first 60-second timer can fire.
+    // The absent lane uses a short timer to verify ordinary polling fallback.
     if (withPg) {
       await withModule(wakeup, async () => {
         const prisma = wakeup.get(PrismaService);
@@ -271,22 +393,20 @@ async function main(): Promise<void> {
         assert.equal(wakeup.get(TenantListener).seen.length, 1);
       });
     } else {
-      try {
-        await assert.rejects(wakeup.init(), OutboxWakeupUnavailableError);
-      } finally {
-        try {
-          // Nest close() awaits the rejected initialization promise before
-          // shutdown hooks. No timer/client was started in this absent lane.
-          await wakeup.close().catch((error: unknown) => {
-            if (!(error instanceof OutboxWakeupUnavailableError)) throw error;
-          });
-        } finally {
-          await wakeup.get(PrismaService).$disconnect();
-        }
-      }
+      await withModule(wakeup, async () => {
+        const prisma = wakeup.get(PrismaService);
+        await prisma.$transaction((tx) =>
+          wakeup
+            .get(OutboxEmitter)
+            .emit(tx, new OrderCreatedEvent('fallback-order', 11)),
+        );
+        const id = await eventId(prisma, 'fallback-order');
+        await waitForSent(prisma, id);
+        assert.equal(wakeup.get(TenantListener).seen.length, 1);
+      });
     }
     console.log(
-      `[packed-examples] optional pg ${withPg ? 'LISTEN/NOTIFY delivery' : 'typed missing-peer startup failure'} PASS`,
+      `[packed-examples] required polling / optional pg ${withPg ? 'LISTEN/NOTIFY delivery before timer' : 'polling fallback without pg'} PASS`,
     );
   } finally {
     await db.$executeRawUnsafe('DROP TABLE IF EXISTS packed_example_orders');

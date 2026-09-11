@@ -1,0 +1,25 @@
+# @nestarc/outbox
+
+> Transactional outbox for NestJS, Prisma, and PostgreSQL. Persist events in the business transaction and deliver them through local handlers or an application-owned publisher.
+
+## Version and reading order
+
+Use the documentation shipped with the installed package or the exact source revision being used. Check the README release-status notice: this checkout includes unreleased changes after 0.3.0. Do not assume that `npm install @nestarc/outbox` installs unreleased behavior.
+
+- [README](README.md): supported environment, SQL setup, minimal integration, release status, and migration notes.
+- [Usage reference](docs/usage.md): configuration, tenant boundaries, administration, retries, delivery guarantees, and shutdown.
+- [Runnable quick start](examples/quick-start/README.md): complete application code and commands. Copy the example to an application directory before running it.
+- [Public declarations](dist/index.d.ts): exported API for an installed or built package. Import runtime values and types from `@nestarc/outbox`.
+- [Fresh database SQL](src/sql/create-outbox-table.sql): resolve with `require.resolve('@nestarc/outbox/src/sql/create-outbox-table.sql')`.
+- [Existing database upgrade SQL](src/sql/upgrade-to-current.sql): resolve with `require.resolve('@nestarc/outbox/src/sql/upgrade-to-current.sql')`.
+
+## Integration boundaries
+
+PostgreSQL is required. Apply the bundled SQL before initializing the Nest module. Use the same caller-owned Prisma transaction for business writes and outbox emission. Keep periodic polling enabled; notifications supplement it. Delivery is at-least-once: handlers and publishers own durable deduplication. An idempotency key is metadata, and neither FIFO nor downstream completion is implied by `SENT`.
+
+The runnable example supplies application code that short README fragments omit. Historical design plans and internal audit reports are not package usage instructions. Built internals and historical SQL files are not supported public imports.
+
+## Published documentation
+
+- [Published 0.3.0 README](https://github.com/nestarc/outbox/blob/v0.3.0/README.md): reference for the currently published version; it does not include this checkout's unreleased fixes.
+- [Official documentation](https://nestarc.dev/packages/outbox/): check the version shown before using its examples.

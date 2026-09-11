@@ -80,6 +80,95 @@ function writeExamples(consumer) {
   }
 }
 
+function runQuickStart(temp, tgz, artifact) {
+  const consumer = path.join(temp, 'quick-start');
+  fs.cpSync(
+    path.join(
+      temp,
+      'with-pg/node_modules/@nestarc/outbox/examples/quick-start',
+    ),
+    consumer,
+    { recursive: true },
+  );
+  const manifestPath = path.join(consumer, 'package.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  assert.equal(manifest.dependencies['@nestarc/outbox'], artifact.version);
+  manifest.dependencies['@nestarc/outbox'] = `file:${tgz}`;
+  fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  const env = { ...process.env };
+  delete env.NODE_PATH;
+  delete env.NPM_CONFIG_FORCE;
+  delete env.NPM_CONFIG_LEGACY_PEER_DEPS;
+  Object.assign(env, {
+    DATABASE_URL: 'postgresql://test:test@127.0.0.1:5433/outbox_test',
+    npm_config_cache: path.join(temp, 'npm-cache'),
+    npm_config_force: 'false',
+    npm_config_legacy_peer_deps: 'false',
+    npm_config_strict_peer_deps: 'true',
+  });
+  run(
+    ['install', '--strict-peer-deps', '--no-audit', '--no-fund'],
+    consumer,
+    env,
+  );
+  const lock = JSON.parse(
+    fs.readFileSync(path.join(consumer, 'package-lock.json'), 'utf8'),
+  );
+  assert.equal(
+    lock.packages['node_modules/@nestarc/outbox'].integrity,
+    artifact.integrity,
+  );
+  for (const [name, version] of Object.entries({
+    ...manifest.dependencies,
+    ...manifest.devDependencies,
+  })) {
+    if (name !== '@nestarc/outbox') {
+      assert.equal(
+        lock.packages[`node_modules/${name}`]?.version,
+        version,
+        name,
+      );
+    }
+  }
+  for (const script of [
+    'prisma:generate',
+    'db:prepare',
+    'typecheck',
+    'build',
+    'start',
+  ]) {
+    run(['run', script], consumer, env);
+  }
+  execFileSync(
+    'npm',
+    [
+      'exec',
+      '--no',
+      '--',
+      'prisma',
+      'db',
+      'execute',
+      '--stdin',
+      '--schema',
+      'prisma/schema.prisma',
+    ],
+    {
+      cwd: consumer,
+      env,
+      input: [
+        'DROP TABLE IF EXISTS quick_start_order_confirmations;',
+        'DROP TABLE IF EXISTS quick_start_processed_events;',
+        'DROP TABLE IF EXISTS quick_start_orders;',
+        'DROP TABLE IF EXISTS outbox_events;',
+      ].join('\n'),
+      stdio: ['pipe', 'inherit', 'inherit'],
+    },
+  );
+  console.log(
+    '[packed-examples] shipped quick-start setup/DI/delivery/durable dedupe PASS',
+  );
+}
+
 function main() {
   const root = path.resolve(__dirname, '..');
   const temp = fs.mkdtempSync(
@@ -190,6 +279,7 @@ function main() {
       }
       run(['run', 'smoke'], consumer, env);
     }
+    runQuickStart(temp, tgz, artifact);
     verifyArtifact(tgz, metadata);
     console.log(
       '[packed-examples] README compile/DI/PostgreSQL/optional pg boundaries PASS',

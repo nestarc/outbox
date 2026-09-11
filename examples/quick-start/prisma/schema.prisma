@@ -1,0 +1,31 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Order {
+  id    String @id @default(uuid()) @db.Uuid
+  total Int
+
+  @@map("quick_start_orders")
+}
+
+model ProcessedEvent {
+  eventId     String   @id @db.Uuid
+  processedAt DateTime @default(now()) @db.Timestamptz(6)
+
+  @@map("quick_start_processed_events")
+}
+
+model OrderConfirmation {
+  id        String   @id @default(uuid()) @db.Uuid
+  orderId   String   @db.Uuid
+  eventId   String   @unique @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+
+  @@map("quick_start_order_confirmations")
+}

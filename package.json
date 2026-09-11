@@ -1,10 +1,10 @@
 {
   "name": "@nestarc/outbox",
   "version": "0.3.0",
-  "description": "Prisma-native transactional outbox for NestJS — atomic event emission, polling with SKIP LOCKED, retry with backoff, @OnOutboxEvent() decorator.",
+  "description": "Transactional outbox for NestJS, Prisma, and PostgreSQL with atomic event writes, local handlers, pluggable broker publishing, retries, and tenant-scoped administration.",
   "license": "MIT",
   "author": "nestarc",
-  "homepage": "https://nestarc.dev",
+  "homepage": "https://nestarc.dev/packages/outbox/",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/nestarc/outbox.git"
@@ -18,6 +18,10 @@
     "outbox-pattern",
     "transactional-outbox",
     "prisma",
+    "postgresql",
+    "typescript",
+    "event-driven",
+    "message-broker",
     "event",
     "dual-write",
     "polling",
@@ -38,6 +42,9 @@
     "dist",
     "src/sql",
     "README.md",
+    "docs/usage.md",
+    "examples/quick-start",
+    "llms.txt",
     "LICENSE"
   ],
   "scripts": {

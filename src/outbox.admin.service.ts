@@ -52,8 +52,12 @@ type OutboxStatsRow = {
   oldest_processing_age_ms: number | bigint | string | null;
 };
 
-type AdminCursorV1 = {
-  v: 1;
+type OutboxPageRow = Record<string, unknown> & {
+  cursor_created_at: string;
+};
+
+type AdminCursorV2 = {
+  v: 2;
   createdAt: string;
   id: string;
   order: 'created_at_desc_id_desc';
@@ -179,7 +183,8 @@ abstract class OutboxAdminBase<TListOptions extends OutboxListOptions> {
 
   /**
    * Deterministic descending pagination. The cursor is an opaque, versioned,
-   * exclusive boundary over `(created_at, id)`.
+   * exclusive boundary over `(created_at, id)` with PostgreSQL microsecond
+   * precision. Version 1 cursors must be restarted from the first page.
    */
   async listPage(
     options: TListOptions & { cursor?: string } = {} as TListOptions,
@@ -223,16 +228,19 @@ abstract class OutboxAdminBase<TListOptions extends OutboxListOptions> {
       const createdAtIndex = values.length;
       values.push(cursor.id);
       const idIndex = values.length;
-      where.push(`(created_at, id) < ($${createdAtIndex}, $${idIndex}::uuid)`);
+      where.push(
+        `(created_at, id) < ($${createdAtIndex}::timestamptz, $${idIndex}::uuid)`,
+      );
     }
 
     const limit = this.normalizeLimit(options.limit);
     values.push(limit + 1);
 
     const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
-    const rows = await this.queryRawUnsafe<Record<string, unknown>[]>(
+    const rows = await this.queryRawUnsafe<OutboxPageRow[]>(
       `
-        SELECT ${RECORD_SELECT}
+        SELECT ${RECORD_SELECT},
+          to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_created_at
         FROM outbox_events
         ${whereSql}
         ORDER BY created_at DESC, id DESC
@@ -247,7 +255,13 @@ abstract class OutboxAdminBase<TListOptions extends OutboxListOptions> {
 
     return {
       records,
-      nextCursor: hasNextPage && boundary ? this.encodeCursor(boundary) : null,
+      nextCursor:
+        hasNextPage && boundary
+          ? this.encodeCursor(
+              boundary,
+              rows[records.length - 1].cursor_created_at,
+            )
+          : null,
     };
   }
 
@@ -522,17 +536,19 @@ abstract class OutboxAdminBase<TListOptions extends OutboxListOptions> {
     return parsePersistedOutboxRecord(row);
   }
 
-  private encodeCursor(record: OutboxRecord): string {
-    const cursor: AdminCursorV1 = {
-      v: 1,
-      createdAt: record.createdAt.toISOString(),
+  private encodeCursor(record: OutboxRecord, createdAt: string): string {
+    const cursor: AdminCursorV2 = {
+      v: 2,
+      // The public record uses Date (milliseconds); only the database text
+      // retains the complete boundary needed for keyset pagination.
+      createdAt,
       id: record.id,
       order: 'created_at_desc_id_desc',
     };
     return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
   }
 
-  private decodeCursor(cursor: string): { createdAt: Date; id: string } {
+  private decodeCursor(cursor: string): { createdAt: string; id: string } {
     try {
       if (cursor.length === 0 || /\s/.test(cursor)) {
         throw new Error('empty cursor');
@@ -545,23 +561,25 @@ abstract class OutboxAdminBase<TListOptions extends OutboxListOptions> {
       if (
         parsed === null ||
         typeof parsed !== 'object' ||
-        (parsed as Partial<AdminCursorV1>).v !== 1 ||
-        (parsed as Partial<AdminCursorV1>).order !==
+        (parsed as Partial<AdminCursorV2>).v !== 2 ||
+        (parsed as Partial<AdminCursorV2>).order !==
           'created_at_desc_id_desc' ||
-        typeof (parsed as Partial<AdminCursorV1>).createdAt !== 'string' ||
-        typeof (parsed as Partial<AdminCursorV1>).id !== 'string' ||
-        !UUID_PATTERN.test((parsed as AdminCursorV1).id)
+        typeof (parsed as Partial<AdminCursorV2>).createdAt !== 'string' ||
+        typeof (parsed as Partial<AdminCursorV2>).id !== 'string' ||
+        !UUID_PATTERN.test((parsed as AdminCursorV2).id)
       ) {
         throw new Error('invalid cursor shape');
       }
-      const createdAt = new Date((parsed as AdminCursorV1).createdAt);
+      const { createdAt, id } = parsed as AdminCursorV2;
+      const date = new Date(createdAt);
       if (
-        !Number.isFinite(createdAt.getTime()) ||
-        createdAt.toISOString() !== (parsed as AdminCursorV1).createdAt
+        !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/.test(createdAt) ||
+        !Number.isFinite(date.getTime()) ||
+        date.toISOString() !== createdAt.replace(/(\.\d{3})\d{3}Z$/, '$1Z')
       ) {
         throw new Error('invalid cursor date');
       }
-      return { createdAt, id: (parsed as AdminCursorV1).id };
+      return { createdAt, id };
     } catch (error) {
       if (error instanceof OutboxCursorError) throw error;
       throw new OutboxCursorError();

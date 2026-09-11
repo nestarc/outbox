@@ -19,6 +19,7 @@ import type {
 } from '../src/interfaces/outbox-options.interface';
 import type { OutboxTransport } from '../src/interfaces/outbox-transport.interface';
 import type { OutboxTenantProvider } from '../src/interfaces/outbox-tenancy.interface';
+import { OutboxConfigurationError } from '../src/errors/outbox-configuration.error';
 
 const schemaInventory = {
   tableExists: true,
@@ -82,6 +83,86 @@ class MockPrismaService {
 
 describe('OutboxModule', () => {
   describe('runtime option validation', () => {
+    it.each(['forRoot', 'forRootAsync'] as const)(
+      'rejects an invalid tenant policy through %s before emit is called',
+      async (registration) => {
+        const options = {
+          prisma: mockPrisma,
+          tenancy: { policy: 'requird' },
+        } as unknown as OutboxOptions;
+        const outbox =
+          registration === 'forRoot'
+            ? OutboxModule.forRoot(options)
+            : OutboxModule.forRootAsync({
+                useFactory: () => options as OutboxAsyncRuntimeOptions,
+              });
+
+        await expect(
+          Test.createTestingModule({ imports: [outbox] }).compile(),
+        ).rejects.toMatchObject({
+          name: 'OutboxConfigurationError',
+          code: 'OUTBOX_INVALID_CONFIGURATION',
+          option: 'tenancy.policy',
+        });
+      },
+    );
+
+    it.each(['forRoot', 'forRootAsync'] as const)(
+      'validates tenant class fields after Nest constructs them through %s',
+      async (registration) => {
+        @Injectable()
+        class InvalidTenantProvider {
+          getTenantId = 'tenant-a';
+        }
+
+        const provider =
+          InvalidTenantProvider as unknown as new () => OutboxTenantProvider;
+        const outbox =
+          registration === 'forRoot'
+            ? OutboxModule.forRoot({
+                prisma: mockPrisma,
+                tenancy: { provider },
+              })
+            : OutboxModule.forRootAsync({
+                useFactory: () => ({ prisma: mockPrisma }),
+                tenantProvider: provider,
+              });
+        await expect(
+          Test.createTestingModule({ imports: [outbox] }).compile(),
+        ).rejects.toMatchObject({
+          name: 'OutboxConfigurationError',
+          option:
+            registration === 'forRoot'
+              ? 'tenancy.provider.getTenantId'
+              : 'tenantProvider.getTenantId',
+        });
+      },
+    );
+
+    it('rejects invalid async module scope before registering providers', () => {
+      expect(() =>
+        OutboxModule.forRootAsync({
+          useFactory: () => ({ prisma: mockPrisma }),
+          isGlobal: 'yes' as unknown as boolean,
+        }),
+      ).toThrow(OutboxConfigurationError);
+    });
+
+    it('reports an invalid async factory result as a configuration error', async () => {
+      await expect(
+        Test.createTestingModule({
+          imports: [
+            OutboxModule.forRootAsync({
+              useFactory: () => null as unknown as OutboxAsyncRuntimeOptions,
+            }),
+          ],
+        }).compile(),
+      ).rejects.toMatchObject({
+        name: 'OutboxConfigurationError',
+        option: 'options',
+      });
+    });
+
     it.each([
       ['negative stuckThreshold', { stuckThreshold: -1 }],
       ['zero batch size', { polling: { enabled: true, batchSize: 0 } }],
@@ -136,7 +217,7 @@ describe('OutboxModule', () => {
       ).rejects.toThrow(/delivery\.mode/);
     });
 
-    it('fails module initialization when polling and wakeup are both disabled', async () => {
+    it('rejects disabled periodic polling during module initialization', async () => {
       const module = await Test.createTestingModule({
         imports: [
           OutboxModule.forRoot({
@@ -148,7 +229,8 @@ describe('OutboxModule', () => {
       }).compile();
 
       await expect(module.init()).rejects.toMatchObject({
-        code: 'OUTBOX_WAKEUP_UNAVAILABLE',
+        code: 'OUTBOX_INVALID_CONFIGURATION',
+        option: 'polling.enabled',
       });
     });
 
@@ -404,6 +486,48 @@ describe('OutboxModule', () => {
       expect(await tenantProvider.getTenantId()).toBe('tenant-from-di');
       expect(transport).toBeInstanceOf(InjectedTransport);
       expect(transport.dependency).toBe(support);
+    });
+
+    it('preserves an existing tenant provider instance and its methods', async () => {
+      const provider = { getTenantId: jest.fn(() => 'tenant-instance') };
+      const module = await Test.createTestingModule({
+        imports: [
+          OutboxModule.forRootAsync({
+            useFactory: () => ({ prisma: mockPrisma }),
+            tenantProvider: provider,
+          }),
+        ],
+      }).compile();
+
+      expect(module.get(OUTBOX_TENANT_PROVIDER)).toBe(provider);
+      expect(provider.getTenantId).not.toHaveBeenCalled();
+    });
+
+    it('supports tenant class fields with dependencies on resolved outbox options', async () => {
+      @Injectable()
+      class OptionsTenantProvider implements OutboxTenantProvider {
+        constructor(@Inject(OUTBOX_OPTIONS) readonly options: OutboxOptions) {}
+        getTenantId = () => 'tenant-from-class-field';
+      }
+
+      const module = await Test.createTestingModule({
+        imports: [
+          OutboxModule.forRootAsync({
+            useFactory: () => ({
+              prisma: mockPrisma,
+              tenancy: { policy: 'required' },
+            }),
+            tenantProvider: OptionsTenantProvider,
+          }),
+        ],
+      }).compile();
+
+      const provider = module.get<OptionsTenantProvider>(
+        OUTBOX_TENANT_PROVIDER,
+      );
+      expect(provider).toBeInstanceOf(OptionsTenantProvider);
+      expect(provider.options).toBe(module.get(OUTBOX_OPTIONS));
+      expect(provider.getTenantId()).toBe('tenant-from-class-field');
     });
 
     it.each([
