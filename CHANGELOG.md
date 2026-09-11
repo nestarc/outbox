@@ -6,7 +6,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] — Unreleased
+
 ### Migration
+
+This pre-1.0 minor changes accepted configuration and admin cursors. Follow the
+[0.4.0 upgrade steps](README.md#upgrading-to-040). The required database schema
+remains 0.3.0; no additional SQL migration is required for a current 0.3.0 schema.
 
 - Keep periodic polling enabled. `polling.enabled: false` now fails Nest module
   initialization with `OutboxConfigurationError` (`OUTBOX_INVALID_CONFIGURATION`),
@@ -37,8 +43,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reference, and a compact `llms.txt` documentation map in the package. Packed
   example checks exercise the complete installed example and verify local
   documentation links.
-- Describe published 0.3.0 and unreleased checkout behavior separately; update
-  package discovery metadata and link directly to the Outbox documentation.
+- Document 0.4.0 behavior and retain a versioned 0.3.0 reference; update package
+  discovery metadata and link directly to the Outbox documentation.
 
 ## [0.3.0] — 2026-09-05
 

@@ -5,7 +5,7 @@ Store a domain event in the same PostgreSQL transaction as your business data, t
 [![npm version](https://img.shields.io/npm/v/@nestarc/outbox.svg)](https://www.npmjs.com/package/@nestarc/outbox)
 [![license](https://img.shields.io/npm/l/@nestarc/outbox.svg)](https://github.com/nestarc/outbox/blob/main/LICENSE)
 
-**Documentation version:** current checkout, including **unreleased changes after 0.3.0**. For the published npm 0.3.0 package, read the [v0.3.0 README](https://github.com/nestarc/outbox/blob/v0.3.0/README.md). See the [unreleased upgrade notes](#unreleased-upgrade-notes) before testing this checkout in an existing application.
+**Documentation version: 0.4.0.** For the 0.3.0 package, read the [v0.3.0 README](https://github.com/nestarc/outbox/blob/v0.3.0/README.md). See the [0.4.0 upgrade notes](#upgrading-to-040) before using this version in an existing application.
 
 ## Contents
 
@@ -21,7 +21,8 @@ Store a domain event in the same PostgreSQL transaction as your business data, t
 - [Custom transport](#custom-transport)
 - [PostgreSQL wakeup](#postgresql-listennotify-wakeup)
 - [Compatibility evidence](#compatibility-evidence)
-- [Upgrading](#upgrading-to-030)
+- [Upgrading to 0.4.0](#upgrading-to-040)
+- [Upgrading from 0.1.x/0.2.x](#upgrading-to-030)
 - [Supported package paths](#supported-package-paths)
 - [Executable example checks](#executable-example-checks)
 
@@ -40,7 +41,7 @@ npm install @nestarc/outbox @nestjs/schedule@5
 npm install @nestarc/outbox @nestjs/schedule@12
 ```
 
-These commands install the published npm release and preserve your existing Prisma client. To run the unreleased code in this checkout, use the local-tarball instructions in the [complete quick-start application](examples/quick-start/README.md).
+These commands install the published npm release and preserve your existing Prisma client. Before 0.4.0 is published, use the local-tarball instructions in the [complete quick-start application](examples/quick-start/README.md) to run this checkout.
 
 NestJS core/common, Schedule, Prisma Client, and `reflect-metadata` are peer dependencies; NestJS core/common and `reflect-metadata` normally already exist in the application. Keep the Prisma CLI and `@prisma/client` on matching versions from major 5, 6, or 7. If Prisma is not configured yet, start from the complete quick-start application linked above.
 
@@ -248,7 +249,7 @@ The reference belongs to this checkout and is included in the package. Prefer th
 
 ## AI agent usage
 
-Start with the packaged [llms.txt](llms.txt) for the documentation reading order, then use the [complete quick-start project](examples/quick-start/README.md) and [API reference](docs/usage.md). Check the installed package version before copying an API or migration command: this checkout includes unreleased changes, while the published 0.3.0 contract has its own versioned README.
+Start with the packaged [llms.txt](llms.txt) for the documentation reading order, then use the [complete quick-start project](examples/quick-start/README.md) and [API reference](docs/usage.md). Check the installed package version before copying an API or migration command: this documentation describes 0.4.0, while the 0.3.0 contract has its own versioned README.
 
 The quick-start project supplies real imports and application services. The packed example tests check the README fragments against an installed artifact; historical plans and reports are background records, not instructions for package consumers.
 
@@ -464,7 +465,7 @@ Connection or LISTEN failures degrade to periodic polling while reconnection ret
 ## Compatibility evidence
 
 Node 22 is the minimum supported runtime. Node 22 and 24 are required controls;
-Node 20 reached upstream EOL and is not supported by 0.3.0.
+Node 20 reached upstream EOL and is not supported by 0.3.0 or later.
 The following exact tuples are checked as packed packages and source tests. They are regression controls for the declared peer ranges, not proof of every possible version combination:
 
 | Node  | NestJS  | Schedule | Prisma | Automated evidence                                                                 |
@@ -531,15 +532,15 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$(node -e "console.log(require.resol
 
 The upgrade validates existing rows and may acquire locks for index replacement and constraints. Repair invalid rows before retrying it and plan a maintenance window for large tables. See [schema diagnostics and upgrade details](docs/usage.md#schema-diagnostics-and-upgrades) and the [versioned SQL source](https://github.com/nestarc/outbox/blob/v0.3.0/src/sql/upgrade-to-current.sql).
 
-## Unreleased upgrade notes
+## Upgrading to 0.4.0
 
-These changes are in the current checkout and have **not** been published as a new npm release:
+0.4.0 is a pre-1.0 minor release with configuration and cursor compatibility changes:
 
 - Keep periodic polling enabled. The previous notification-only configuration (`polling.enabled: false`) is now rejected at module initialization with `OutboxConfigurationError`. Notifications remain an optional latency improvement.
 - Discard previously saved `listPage()` v1 cursors and restart from the first page. Cursor v2 preserves PostgreSQL timestamp microseconds; v1 input returns `OUTBOX_INVALID_CURSOR`.
-- Correct invalid hook, tenant-provider, and notification settings before startup; the current checkout validates their object and callback shapes explicitly.
+- Correct invalid hook, tenant-provider, and notification settings before startup; 0.4.0 validates their object and callback shapes explicitly.
 
-The package version remains 0.3.0 until a release is prepared. Test these changes using the local package artifact rather than assuming an unversioned npm install includes them.
+The required database schema remains 0.3.0. An existing current 0.3.0 schema needs no additional SQL migration. Applications upgrading from 0.1.x/0.2.x must also follow the [0.3.0 upgrade procedure](#upgrading-to-030).
 
 ## Supported package paths
 

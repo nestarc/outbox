@@ -1,6 +1,6 @@
 # @nestarc/outbox usage and API reference
 
-This reference describes the **current checkout, including unreleased changes after 0.3.0**. It is shipped inside the npm tarball under `docs/usage.md`; read the document from the package version you installed. For the published 0.3.0 contract, use the [v0.3.0 README](https://github.com/nestarc/outbox/blob/v0.3.0/README.md). Historical plans and reports are not package usage instructions.
+This reference describes **0.4.0**. It is shipped inside the npm tarball under `docs/usage.md`; read the document from the package version you installed. For the 0.3.0 contract, use the [v0.3.0 README](https://github.com/nestarc/outbox/blob/v0.3.0/README.md). Historical plans and reports are not package usage instructions.
 
 Start with [installation and the quick start](../README.md#installation). PostgreSQL is the only supported database; PostgreSQL 16 is the automated verification baseline. An older minimum version has not been established by this project's tests.
 

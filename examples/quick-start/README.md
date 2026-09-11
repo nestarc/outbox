@@ -6,10 +6,10 @@ receipt in a second transaction. It sends no email and connects to no broker.
 The application waits for `SENT`, replays the consumer operation, checks that
 only one confirmation exists, prints the result, and closes cleanly.
 
-This example belongs to the current checkout and its candidate tarball. The
-published 0.3.0 package predates this example directory. Its application code
-also uses APIs available in 0.3.0; the pinned dependency below is installed from
-npm by default, while repository checks substitute the candidate tarball.
+This example is included in 0.4.0 and pins `@nestarc/outbox` to 0.4.0. The
+dependency is installed from npm by default, while repository checks substitute
+the candidate tarball. Before 0.4.0 is published, use the local package
+instructions below.
 
 ## Requirements
 
@@ -21,7 +21,7 @@ npm by default, while repository checks substitute the candidate tarball.
 
 ## Copy and run
 
-From an application that has installed the candidate `@nestarc/outbox` tarball
+From an application that has installed the `@nestarc/outbox` 0.4.0 tarball
 containing this directory, copy the complete example before installing its
 dependencies:
 
@@ -44,8 +44,11 @@ npm run build
 npm start
 ```
 
-To try local package changes, run `npm install /absolute/path/to/package.tgz`
-in the example directory after `npm install` and before the setup commands.
+To try local package changes or run before 0.4.0 is published, build and pack
+from the repository root with `npm run build` and `npm pack`. In the example
+directory, replace `npm install --strict-peer-deps` above with
+`npm install --strict-peer-deps /absolute/path/to/nestarc-outbox-0.4.0.tgz`,
+then continue with the database and application setup commands.
 
 `db:prepare` executes the application-owned SQL and the package's public
 `create-outbox-table.sql` asset using Prisma CLI. It does not require `psql`.

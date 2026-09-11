@@ -1,6 +1,6 @@
 {
   "name": "@nestarc/outbox",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Transactional outbox for NestJS, Prisma, and PostgreSQL with atomic event writes, local handlers, pluggable broker publishing, retries, and tenant-scoped administration.",
   "license": "MIT",
   "author": "nestarc",
