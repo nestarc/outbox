@@ -15,7 +15,7 @@ const REQUIRED_ROOT_FILES = [
   'llms.txt',
 ];
 const REQUIRED_DOCUMENTATION_FILES = [
-  'docs/usage.md',
+  'USAGE.md',
   'examples/quick-start/README.md',
   'examples/quick-start/package.json',
   'examples/quick-start/tsconfig.json',

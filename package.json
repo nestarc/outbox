@@ -42,7 +42,7 @@
     "dist",
     "src/sql",
     "README.md",
-    "docs/usage.md",
+    "USAGE.md",
     "examples/quick-start",
     "llms.txt",
     "LICENSE"

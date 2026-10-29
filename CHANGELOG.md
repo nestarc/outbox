@@ -6,6 +6,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Maintenance
+
+- Keep `docs/` as local working material outside Git tracking, and preserve the
+  packaged usage reference at `USAGE.md`.
+- Disable scheduled Dependabot updates.
+
 ## [0.4.0] — 2026-09-11
 
 ### Migration
