@@ -20,6 +20,7 @@ import type {
 import type { OutboxTransport } from '../src/interfaces/outbox-transport.interface';
 import type { OutboxTenantProvider } from '../src/interfaces/outbox-tenancy.interface';
 import { OutboxConfigurationError } from '../src/errors/outbox-configuration.error';
+import { OutboxPoller } from '../src';
 
 const schemaInventory = {
   tableExists: true,
@@ -82,6 +83,33 @@ class MockPrismaService {
 }
 
 describe('OutboxModule', () => {
+  it.each(['forRoot', 'forRootAsync'] as const)(
+    'lets an application inject and stop the worker through %s',
+    async (registration) => {
+      @Injectable()
+      class ApplicationShutdown {
+        constructor(readonly poller: OutboxPoller) {}
+        async stop(): Promise<void> {
+          await this.poller.stop();
+        }
+      }
+      const options = { prisma: mockPrisma };
+      const module =
+        registration === 'forRoot'
+          ? OutboxModule.forRoot(options)
+          : OutboxModule.forRootAsync({ useFactory: () => options });
+      const app = await Test.createTestingModule({
+        imports: [module],
+        providers: [ApplicationShutdown],
+      }).compile();
+      try {
+        await app.get(ApplicationShutdown).stop();
+      } finally {
+        await app.close();
+      }
+    },
+  );
+
   describe('runtime option validation', () => {
     it.each(['forRoot', 'forRootAsync'] as const)(
       'rejects an invalid tenant policy through %s before emit is called',

@@ -38,8 +38,15 @@ import {
   validateOutboxOptions,
 } from './outbox-invariants';
 import { OutboxSchemaGuard } from './outbox.schema';
+import { OutboxConfigurationError } from './errors/outbox-configuration.error';
+import { OutboxShutdownError } from './errors/outbox-shutdown.error';
 
 const POLL_INTERVAL_NAME = 'outbox-poll';
+
+export interface OutboxStopOptions {
+  /** Positive 32-bit milliseconds; defaults to 30 seconds. */
+  timeoutMs?: number;
+}
 
 interface LeaseHeartbeat {
   stop(): Promise<boolean>;
@@ -116,7 +123,7 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
 
   async onModuleInit(): Promise<void> {
     if (this.schemaGuard) await this.schemaGuard.assertCompatible();
-    if (!this.pollingEnabled) return;
+    if (!this.pollingEnabled || this.isShuttingDown) return;
 
     const interval = setInterval(() => this.requestPoll(), this.interval);
     this.schedulerRegistry.addInterval(POLL_INTERVAL_NAME, interval);
@@ -126,6 +133,27 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
   }
 
   async onApplicationShutdown(): Promise<void> {
+    await this.stop();
+  }
+
+  /**
+   * Permanently stop new claims and wait for the current poll, publisher and
+   * fenced completion to settle. Call BEFORE app.close() or closing a transport.
+   * A timeout rejects without cancelling callbacks; keep their dependencies open
+   * and call stop() again to await settlement. Repeated/concurrent calls are safe.
+   */
+  async stop(options: OutboxStopOptions = {}): Promise<void> {
+    const timeoutMs = options.timeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT;
+    if (
+      !Number.isInteger(timeoutMs) ||
+      timeoutMs <= 0 ||
+      timeoutMs > 2147483647
+    ) {
+      throw new OutboxConfigurationError(
+        'stop.timeoutMs',
+        'must be a positive 32-bit integer',
+      );
+    }
     this.isShuttingDown = true;
     this.pollRerunRequested = false;
 
@@ -135,18 +163,28 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
       // Interval might not exist if polling was disabled
     }
 
-    const start = Date.now();
-    while (
-      (this.pollInFlight > 0 || this.activeCount > 0) &&
-      Date.now() - start < DEFAULT_SHUTDOWN_TIMEOUT
-    ) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-
-    if (this.pollInFlight > 0 || this.activeCount > 0) {
-      this.logger.warn(
-        `Shutdown timeout: ${this.pollInFlight} polls, ${this.activeCount} events still in flight`,
-      );
+    const coordinator = this.pollCoordinator;
+    if (!coordinator) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        coordinator,
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(
+                new OutboxShutdownError(
+                  timeoutMs,
+                  this.pollInFlight,
+                  this.activeCount,
+                ),
+              ),
+            timeoutMs,
+          );
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 
@@ -237,6 +275,7 @@ export class OutboxPoller implements OnModuleInit, OnApplicationShutdown {
       });
 
       for (let processed = 0; processed < this.batchSize; processed++) {
+        if (this.isShuttingDown) break;
         const [record] = await this.fetchAndLock();
         if (!record) break;
 

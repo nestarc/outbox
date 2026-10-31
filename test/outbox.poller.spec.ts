@@ -1211,6 +1211,140 @@ describe('OutboxPoller', () => {
   });
 
   describe('onApplicationShutdown', () => {
+    it('fences new polls and waits for publishing AND its completion write before closing', async () => {
+      let releasePublish!: () => void;
+      let releaseCompletion!: () => void;
+      let started!: () => void;
+      let completing!: () => void;
+      const published = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const completion = new Promise<void>((resolve) => {
+        completing = resolve;
+      });
+      const prisma = createMockPrisma([createRecord()]);
+      prisma.$executeRaw.mockImplementationOnce(async () => {
+        completing();
+        await new Promise<void>((resolve) => {
+          releaseCompletion = resolve;
+        });
+        return 1;
+      });
+      const publisher = {
+        publish: jest.fn(async () => {
+          started();
+          await new Promise<void>((resolve) => {
+            releasePublish = resolve;
+          });
+        }),
+      };
+      const poller = createPoller({
+        prisma,
+        transport: publisher,
+        options: { delivery: { mode: 'publisher' } },
+      });
+      const polling = poller.poll();
+      await published;
+      let stopped = false;
+      const stopping = poller.stop().then(() => {
+        stopped = true;
+      });
+      const concurrentStop = poller.stop();
+      poller.requestPoll();
+      await poller.poll();
+      expect(stopped).toBe(false);
+      releasePublish();
+      await completion;
+      expect(stopped).toBe(false);
+      releaseCompletion();
+      await Promise.all([polling, stopping, concurrentStop]);
+      await poller.stop();
+      expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+      expect(publisher.publish).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects an incomplete drain and allows a later stop to await settlement', async () => {
+      let release!: () => void;
+      let started!: () => void;
+      const dispatched = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const prisma = createMockPrisma([createRecord()]);
+      const publisher = {
+        publish: jest.fn(async () => {
+          started();
+          await new Promise<void>((resolve) => {
+            release = resolve;
+          });
+        }),
+      };
+      const poller = createPoller({
+        prisma,
+        transport: publisher,
+        options: { delivery: { mode: 'publisher' } },
+      });
+      const polling = poller.poll();
+      await dispatched;
+      await expect(poller.stop({ timeoutMs: 5 })).rejects.toMatchObject({
+        code: 'OUTBOX_SHUTDOWN_INCOMPLETE',
+        pollsInFlight: 1,
+        eventsInFlight: 1,
+      });
+      await poller.poll();
+      expect(prisma.$executeRaw).not.toHaveBeenCalled();
+      release();
+      await Promise.all([polling, poller.stop()]);
+      expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+      expect(prisma.$executeRaw.mock.calls[0][0].join('')).toContain(
+        "SET status = 'SENT'",
+      );
+    });
+
+    it.each([0, -1, 0.5, NaN, Infinity, 2147483648])(
+      'rejects invalid stop timeout %s',
+      async (timeoutMs) => {
+        await expect(createPoller().stop({ timeoutMs })).rejects.toMatchObject({
+          code: 'OUTBOX_INVALID_CONFIGURATION',
+        });
+      },
+    );
+
+    it('does not start timers when stopped before initialization', async () => {
+      const schedulerRegistry = createMockSchedulerRegistry();
+      const poller = createPoller({ schedulerRegistry });
+      await poller.stop();
+      await poller.onModuleInit();
+      expect(schedulerRegistry.addInterval).not.toHaveBeenCalled();
+    });
+
+    it('reports a failed in-flight poll and can subsequently confirm quiescence', async () => {
+      let rejectFetch!: (error: Error) => void;
+      let started!: () => void;
+      const fetching = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const prisma = createMockPrisma();
+      prisma.$queryRaw.mockImplementation(() => {
+        started();
+        return new Promise((_resolve, reject) => {
+          rejectFetch = reject;
+        });
+      });
+      const poller = createPoller({ prisma });
+      const polling = poller.poll();
+      await fetching;
+      const stopping = poller.stop();
+      const failedPoll = expect(polling).rejects.toThrow(
+        'database unavailable',
+      );
+      const failedStop = expect(stopping).rejects.toThrow(
+        'database unavailable',
+      );
+      rejectFetch(new Error('database unavailable'));
+      await Promise.all([failedPoll, failedStop]);
+      await expect(poller.stop()).resolves.toBeUndefined();
+    });
+
     it('should delete interval from SchedulerRegistry', async () => {
       const schedulerRegistry = createMockSchedulerRegistry();
       const poller = createPoller({ schedulerRegistry });
@@ -1250,6 +1384,7 @@ describe('OutboxPoller', () => {
 
       // Start poll (it will block on fetchAndLock)
       const pollPromise = poller.poll();
+      await Promise.resolve(); // Let the claim query enter its barrier.
 
       // Start shutdown while poll is in-flight
       const shutdownPromise = poller.onApplicationShutdown();
@@ -1356,6 +1491,7 @@ describe('OutboxPoller', () => {
 
         prisma.$executeRaw.mockResolvedValue(rows);
         const inFlight = poller.poll();
+        await Promise.resolve(); // Claim has started before stop fences new work.
         const shutdown = poller.onApplicationShutdown();
         releaseFetch();
         await Promise.all([inFlight, shutdown]);

@@ -1,6 +1,6 @@
 # @nestarc/outbox usage and API reference
 
-This reference describes **0.4.0**. It is shipped inside the npm tarball under `USAGE.md`; read the document from the package version you installed. For the 0.3.0 contract, use the [v0.3.0 README](https://github.com/nestarc/outbox/blob/v0.3.0/README.md). Historical plans and reports are not package usage instructions.
+This reference describes **0.4.1**. It is shipped inside the npm tarball under `USAGE.md`; read the document from the package version you installed. For the 0.3.0 contract, use the [v0.3.0 README](https://github.com/nestarc/outbox/blob/v0.3.0/README.md). Historical plans and reports are not package usage instructions.
 
 Start with [installation and the quick start](README.md#installation). PostgreSQL is the only supported database; PostgreSQL 16 is the automated verification baseline. An older minimum version has not been established by this project's tests.
 
@@ -452,7 +452,42 @@ boundary.
 
 ## Graceful Shutdown
 
-Enable Nest shutdown hooks in the application bootstrap to handle operating-system signals:
+**Since 0.4.1:** `OutboxPoller` and `OutboxStopOptions` are exported from the
+package root, and the poller is exported by both module registration paths.
+Version 0.4.0 does not expose this API.
+
+For a transport that shuts down in `onModuleDestroy` (including `@nestarc/jobs`),
+stop Outbox before entering Nest's shutdown lifecycle:
+
+```typescript
+import { OutboxPoller } from '@nestarc/outbox';
+
+async function closeApplication() {
+  await app.get(OutboxPoller).stop({ timeoutMs: 30_000 });
+  await app.close();
+}
+```
+
+Use this function for programmatic closes and a single application-owned signal
+handler. Do not also register `app.enableShutdownHooks()` for the same signals:
+that independent close path can destroy Jobs before the producer drains.
+`stop()` permanently fences new polls (including notification wakeups), drops
+queued reruns, and waits for in-flight claims, publisher callbacks, heartbeats
+and fenced completion writes. Claims acquired during stop are released without
+consuming a delivery retry. The listener connection closes during `app.close()`;
+its notifications cannot restart a stopped poller.
+
+The default deadline is 30 seconds; `timeoutMs` must be a positive 32-bit integer.
+`OUTBOX_SHUTDOWN_INCOMPLETE` reports the remaining poll/event counts. A timeout
+does not cancel the callback: keep its transport and database open, then call
+`stop()` again to await settlement. Concurrent calls are safe. A stopped poller
+cannot be restarted; initialize a new application to resume remaining rows.
+`onApplicationShutdown()` delegates to `stop()` and rejects on
+timeout rather than reporting success. Poll failures during the wait propagate;
+after fixing the dependency, another `stop()` can confirm that no callback remains.
+
+For a standalone local-handler application whose dependencies remain open through
+`onApplicationShutdown`, Nest's automatic shutdown hooks can invoke this drain:
 
 ```typescript
 const app = await NestFactory.create(AppModule);
@@ -460,14 +495,16 @@ app.enableShutdownHooks();
 await app.listen(3000);
 ```
 
-Calling `app.close()` also runs the Nest shutdown lifecycle. During that lifecycle:
+Calling `app.close()` also runs this lifecycle with the default 30-second deadline.
+It cannot establish the required order for a co-located Jobs transport; use the
+explicit stop-before-close sequence above in that case.
 
-1. The scheduler stops accepting new cycles and discards queued polling work.
-2. A claim returned by an in-flight query after shutdown begins is released to `PENDING` with its original claim token and is never dispatched.
-3. An active callback keeps its heartbeat while the poller waits for in-flight work, up to a fixed **30 seconds**.
-4. On timeout the poller logs the remaining work and returns control to Nest. It does not cancel callback code, force a process exit, or guarantee that external side effects have stopped.
-
-Set application-level callback/network timeouts and a process-manager termination grace period that accommodates shutdown. The package has no public option to change the 30-second drain timeout.
+**Upgrade from 0.4.0:** the old automatic hook logged remaining work and returned
+on timeout. In 0.4.1 an incomplete drain rejects with `OutboxShutdownError` instead.
+Handle that failure and keep callback dependencies open until settlement, or let
+the process supervisor terminate the process for subsequent lease recovery.
+Set callback/network timeouts and a termination grace period that accommodates
+the application's drain deadline.
 
 After a process crash or event-loop failure stops heartbeats, the claim becomes recoverable when `lease_expires_at` passes. Recovery runs every tenth poll cycle and does not increment `retry_count`. A callback that hangs while its event loop and database heartbeat remain healthy cannot be distinguished from legitimate long work; an application-level timeout and process supervision must handle that case.
 

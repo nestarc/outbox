@@ -4,7 +4,7 @@
 
 ## Version and reading order
 
-This documentation describes 0.4.0. Use the documentation shipped with the installed package or the exact source revision being used. Before 0.4.0 is published, install the local tarball to try this checkout; do not assume that `npm install @nestarc/outbox` installs it.
+This documentation describes 0.4.1. Use the documentation shipped with the installed package or the exact source revision being used. Install a local tarball to verify uncommitted changes; an npm install uses the published artifact.
 
 - [README](README.md): supported environment, SQL setup, minimal integration, release status, and migration notes.
 - [Usage reference](USAGE.md): configuration, tenant boundaries, administration, retries, delivery guarantees, and shutdown.

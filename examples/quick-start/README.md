@@ -6,9 +6,9 @@ receipt in a second transaction. It sends no email and connects to no broker.
 The application waits for `SENT`, replays the consumer operation, checks that
 only one confirmation exists, prints the result, and closes cleanly.
 
-This example is included in 0.4.0 and pins `@nestarc/outbox` to 0.4.0. The
+This example is included in 0.4.1 and pins `@nestarc/outbox` to 0.4.1. The
 dependency is installed from npm by default, while repository checks substitute
-the candidate tarball. Before 0.4.0 is published, use the local package
+the candidate tarball. To try local changes, use the local package
 instructions below.
 
 ## Requirements
@@ -21,7 +21,7 @@ instructions below.
 
 ## Copy and run
 
-From an application that has installed the `@nestarc/outbox` 0.4.0 tarball
+From an application that has installed the `@nestarc/outbox` 0.4.1 tarball
 containing this directory, copy the complete example before installing its
 dependencies:
 
@@ -44,10 +44,10 @@ npm run build
 npm start
 ```
 
-To try local package changes or run before 0.4.0 is published, build and pack
+To try local package changes, build and pack
 from the repository root with `npm run build` and `npm pack`. In the example
 directory, replace `npm install --strict-peer-deps` above with
-`npm install --strict-peer-deps /absolute/path/to/nestarc-outbox-0.4.0.tgz`,
+`npm install --strict-peer-deps /absolute/path/to/nestarc-outbox-0.4.1.tgz`,
 then continue with the database and application setup commands.
 
 `db:prepare` executes the application-owned SQL and the package's public
