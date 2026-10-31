@@ -5,7 +5,7 @@ Store a domain event in the same PostgreSQL transaction as your business data, t
 [![npm version](https://img.shields.io/npm/v/@nestarc/outbox.svg)](https://www.npmjs.com/package/@nestarc/outbox)
 [![license](https://img.shields.io/npm/l/@nestarc/outbox.svg)](https://github.com/nestarc/outbox/blob/main/LICENSE)
 
-**Documentation version: 0.4.0.** For the 0.3.0 package, read the [v0.3.0 README](https://github.com/nestarc/outbox/blob/v0.3.0/README.md). See the [0.4.0 upgrade notes](#upgrading-to-040) before using this version in an existing application.
+**Documentation version: 0.4.1.** For the 0.3.0 package, read the [v0.3.0 README](https://github.com/nestarc/outbox/blob/v0.3.0/README.md). See the [0.4.0 upgrade notes](#upgrading-to-040) before using this version in an existing application.
 
 ## Contents
 
@@ -41,7 +41,7 @@ npm install @nestarc/outbox @nestjs/schedule@5
 npm install @nestarc/outbox @nestjs/schedule@12
 ```
 
-These commands install the published npm release and preserve your existing Prisma client. Before 0.4.0 is published, use the local-tarball instructions in the [complete quick-start application](examples/quick-start/README.md) to run this checkout.
+These commands install the published npm release and preserve your existing Prisma client. To test a local checkout, use the local-tarball instructions in the [complete quick-start application](examples/quick-start/README.md) to run this checkout.
 
 NestJS core/common, Schedule, Prisma Client, and `reflect-metadata` are peer dependencies; NestJS core/common and `reflect-metadata` normally already exist in the application. Keep the Prisma CLI and `@prisma/client` on matching versions from major 5, 6, or 7. If Prisma is not configured yet, start from the complete quick-start application linked above.
 
@@ -213,7 +213,11 @@ app.enableShutdownHooks();
 await app.listen(3000);
 ```
 
-The complete example includes these imports and bootstrap. The poller allows up to a fixed 30 seconds to drain; this does not forcibly cancel callbacks or external side effects. See [shutdown behavior](USAGE.md#graceful-shutdown).
+The complete example includes these imports and bootstrap. Since 0.4.1,
+`OutboxPoller.stop()` supports an explicit drain deadline and reports an incomplete
+drain with `OutboxShutdownError` (`OUTBOX_SHUTDOWN_INCOMPLETE`). For transports
+such as Jobs that close earlier in Nest's lifecycle, stop Outbox **before** closing
+the application. See [shutdown behavior](USAGE.md#graceful-shutdown).
 
 ## Delivery Contract and Duplicate Handling
 
@@ -249,7 +253,7 @@ The reference belongs to this checkout and is included in the package. Prefer th
 
 ## AI agent usage
 
-Start with the packaged [llms.txt](llms.txt) for the documentation reading order, then use the [complete quick-start project](examples/quick-start/README.md) and [API reference](USAGE.md). Check the installed package version before copying an API or migration command: this documentation describes 0.4.0, while the 0.3.0 contract has its own versioned README.
+Start with the packaged [llms.txt](llms.txt) for the documentation reading order, then use the [complete quick-start project](examples/quick-start/README.md) and [API reference](USAGE.md). Check the installed package version before copying an API or migration command: this documentation describes 0.4.1, while the 0.3.0 contract has its own versioned README.
 
 The quick-start project supplies real imports and application services. The packed example tests check the README fragments against an installed artifact; historical plans and reports are background records, not instructions for package consumers.
 

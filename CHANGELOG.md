@@ -6,6 +6,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-10-31
+
+### Added
+
+- Export `OutboxPoller` from the package root and both module registration paths,
+  with `stop({ timeoutMs })` to fence new claims and await active publisher work,
+  lease heartbeats, and fenced database completion before closing Jobs or other
+  transport dependencies. Stop is permanent, concurrent calls are safe, and a
+  timed-out caller can retry after the active work settles.
+- Export `OutboxStopOptions`, `OutboxShutdownError`, and the stable
+  `OUTBOX_SHUTDOWN_INCOMPLETE` code with remaining poll/event counts.
+
+### Fixed
+
+- Report an incomplete automatic shutdown drain as an error instead of logging
+  and returning success after 30 seconds. A timeout does not cancel callbacks;
+  keep their dependencies open and handle the error or process termination.
+- Prevent queued cycles and post-initialization polling from restarting after
+  stop. Release a claim acquired during stop without consuming its retry budget.
+
+### Documentation
+
+- Document explicit Outbox stop-before-Jobs-close ordering and refresh the
+  packaged quick-start pin and usage reference for 0.4.1.
+
 ### Maintenance
 
 - Keep `docs/` as local working material outside Git tracking, and preserve the

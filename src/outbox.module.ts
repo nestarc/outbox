@@ -84,6 +84,7 @@ export class OutboxModule {
         OutboxExplorer,
       ],
       exports: [
+        OutboxPoller,
         OutboxOperatorService,
         OutboxTenantAdminService,
         OutboxEmitter,
@@ -128,6 +129,7 @@ export class OutboxModule {
         OutboxExplorer,
       ],
       exports: [
+        OutboxPoller,
         OutboxOperatorService,
         OutboxTenantAdminService,
         OutboxEmitter,

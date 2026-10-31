@@ -1,4 +1,10 @@
-import type { OutboxOptions, OutboxRecord } from '@nestarc/outbox';
+import {
+  OutboxPoller,
+  OutboxShutdownError,
+  type OutboxStopOptions,
+  type OutboxOptions,
+  type OutboxRecord,
+} from '@nestarc/outbox';
 
 const options: OutboxOptions = {
   prisma: {
@@ -9,4 +15,8 @@ const options: OutboxOptions = {
 
 const recordId: OutboxRecord['id'] = '00000000-0000-0000-0000-000000000000';
 
-export { options, recordId };
+const stopOptions: OutboxStopOptions = { timeoutMs: 1000 };
+const stop: (options?: OutboxStopOptions) => Promise<void> =
+  OutboxPoller.prototype.stop;
+
+export { options, recordId, stop, stopOptions, OutboxShutdownError };

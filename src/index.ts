@@ -10,6 +10,12 @@ export {
 } from './outbox.admin.service';
 export { OutboxEmitter } from './outbox.emitter';
 export { OutboxListener } from './outbox.listener';
+export { OutboxPoller } from './outbox.poller';
+export type { OutboxStopOptions } from './outbox.poller';
+export {
+  OUTBOX_SHUTDOWN_INCOMPLETE,
+  OutboxShutdownError,
+} from './errors/outbox-shutdown.error';
 export {
   OUTBOX_INVALID_CURSOR,
   OutboxCursorError,
